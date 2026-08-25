@@ -18,14 +18,15 @@ class MediaManager {
     
     private func startPolling() {
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            DispatchQueue.main.async {
+            DispatchQueue.global(qos: .userInitiated).async {
                 self?.fetchNowPlayingInfo()
             }
         }
-        fetchNowPlayingInfo()
+        DispatchQueue.global(qos: .userInitiated).async {
+            self.fetchNowPlayingInfo()
+        }
     }
     
-    @MainActor
     func fetchNowPlayingInfo() {
         let apps = NSWorkspace.shared.runningApplications
         let hasSpotify = apps.contains { $0.bundleIdentifier == "com.spotify.client" }
@@ -137,7 +138,6 @@ class MediaManager {
         executeScriptAndParse(scriptSource)
     }
     
-    @MainActor
     private func executeScriptAndParse(_ scriptSource: String) {
         guard let script = NSAppleScript(source: scriptSource) else {
             setNotPlaying()
@@ -150,20 +150,24 @@ class MediaManager {
         if let resultString = result.stringValue, !resultString.isEmpty {
             let parts = resultString.components(separatedBy: "|")
             if parts.count >= 5 {
-                self.title = parts[1].isEmpty ? "Unknown" : parts[1]
-                self.artist = parts[2]
-                self.isPlaying = (parts[3] == "playing")
+                let newTitle = parts[1].isEmpty ? "Unknown" : parts[1]
+                let newArtist = parts[2]
+                let newIsPlaying = (parts[3] == "playing")
                 
                 let sourceApp = parts[0]
                 let imgUrlString = parts[4]
                 
-                self.isYouTube = imgUrlString.contains("youtube.com")
+                let newIsYouTube = imgUrlString.contains("youtube.com")
                 
                 if imgUrlString != "none", let url = URL(string: imgUrlString) {
                     // Fetch artwork asynchronously
                     Task {
                         if let data = try? Data(contentsOf: url), let image = NSImage(data: data) {
                             await MainActor.run {
+                                self.title = newTitle
+                                self.artist = newArtist
+                                self.isPlaying = newIsPlaying
+                                self.isYouTube = newIsYouTube
                                 self.artworkImage = image
                             }
                         }
@@ -176,8 +180,19 @@ class MediaManager {
                     else if sourceApp == "Brave" { bundleId = "com.brave.Browser" }
                     else { bundleId = "com.apple.Safari" }
                     
+                    var newArtworkImage: NSImage? = nil
                     if let appUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
-                        self.artworkImage = NSWorkspace.shared.icon(forFile: appUrl.path)
+                        newArtworkImage = NSWorkspace.shared.icon(forFile: appUrl.path)
+                    }
+                    
+                    Task {
+                        await MainActor.run {
+                            self.title = newTitle
+                            self.artist = newArtist
+                            self.isPlaying = newIsPlaying
+                            self.isYouTube = newIsYouTube
+                            self.artworkImage = newArtworkImage
+                        }
                     }
                 }
             } else {
@@ -189,11 +204,15 @@ class MediaManager {
     }
     
     private func setNotPlaying() {
-        self.title = "Not Playing"
-        self.artist = ""
-        self.isPlaying = false
-        self.artworkImage = nil
-        self.isYouTube = false
+        Task {
+            await MainActor.run {
+                self.title = "Not Playing"
+                self.artist = ""
+                self.isPlaying = false
+                self.artworkImage = nil
+                self.isYouTube = false
+            }
+        }
     }
     
     func togglePlayPause() {
@@ -209,97 +228,99 @@ class MediaManager {
     }
     
     private func runControlCommand(_ command: String) {
-        let apps = NSWorkspace.shared.runningApplications
-        let hasSpotify = apps.contains { $0.bundleIdentifier == "com.spotify.client" }
-        let hasMusic = apps.contains { $0.bundleIdentifier == "com.apple.Music" }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let apps = NSWorkspace.shared.runningApplications
+            let hasSpotify = apps.contains { $0.bundleIdentifier == "com.spotify.client" }
+            let hasMusic = apps.contains { $0.bundleIdentifier == "com.apple.Music" }
 
-        var scriptSource = ""
+            var scriptSource = ""
 
-        if hasSpotify {
-            scriptSource = """
-            try
-                tell application id "com.spotify.client" to \(command)
-            end try
-            """
-        } else if hasMusic {
-            scriptSource = """
-            try
-                tell application id "com.apple.Music" to \(command)
-            end try
-            """
-        } else {
-            scriptSource = """
-            try
-                set jsCmd to "
-                    (function() {
-                        var cmd = '\(command)';
-                        if (cmd === 'playpause') {
-                            var playButton = document.querySelector('[data-testid=\\"control-button-playpause\\"]');
-                            if (playButton) { playButton.click(); return; }
-                            var ytPlay = document.querySelector('.ytp-play-button');
-                            if (ytPlay) { ytPlay.click(); return; }
-                            var media = document.querySelectorAll('video, audio');
-                            for (var i = 0; i < media.length; i++) {
-                                if (!media[i].paused) media[i].pause();
-                                else media[i].play();
+            if hasSpotify {
+                scriptSource = """
+                try
+                    tell application id "com.spotify.client" to \(command)
+                end try
+                """
+            } else if hasMusic {
+                scriptSource = """
+                try
+                    tell application id "com.apple.Music" to \(command)
+                end try
+                """
+            } else {
+                scriptSource = """
+                try
+                    set jsCmd to "
+                        (function() {
+                            var cmd = '\(command)';
+                            if (cmd === 'playpause') {
+                                var playButton = document.querySelector('[data-testid=\\"control-button-playpause\\"]');
+                                if (playButton) { playButton.click(); return; }
+                                var ytPlay = document.querySelector('.ytp-play-button');
+                                if (ytPlay) { ytPlay.click(); return; }
+                                var media = document.querySelectorAll('video, audio');
+                                for (var i = 0; i < media.length; i++) {
+                                    if (!media[i].paused) media[i].pause();
+                                    else media[i].play();
+                                }
+                            } else if (cmd === 'next track') {
+                                var nextButton = document.querySelector('[data-testid=\\"control-button-skip-forward\\"]');
+                                if (nextButton) { nextButton.click(); return; }
+                                var ytNext = document.querySelector('.ytp-next-button');
+                                if (ytNext) { ytNext.click(); return; }
+                            } else if (cmd === 'previous track') {
+                                var prevButton = document.querySelector('[data-testid=\\"control-button-skip-back\\"]');
+                                if (prevButton) { prevButton.click(); return; }
+                                var ytPrev = document.querySelector('.ytp-prev-button');
+                                if (ytPrev) { ytPrev.click(); return; }
                             }
-                        } else if (cmd === 'next track') {
-                            var nextButton = document.querySelector('[data-testid=\\"control-button-skip-forward\\"]');
-                            if (nextButton) { nextButton.click(); return; }
-                            var ytNext = document.querySelector('.ytp-next-button');
-                            if (ytNext) { ytNext.click(); return; }
-                        } else if (cmd === 'previous track') {
-                            var prevButton = document.querySelector('[data-testid=\\"control-button-skip-back\\"]');
-                            if (prevButton) { prevButton.click(); return; }
-                            var ytPrev = document.querySelector('.ytp-prev-button');
-                            if (ytPrev) { ytPrev.click(); return; }
-                        }
-                    })();
-                "
-                
-                if application "Safari" is running then
-                    tell application id "com.apple.Safari"
-                        set winList to every window
-                        repeat with win in winList
-                            set tabList to every tab of win
-                            repeat with t in tabList
-                                set tabURL to URL of t
-                                if tabURL is not missing value then
-                                    if tabURL contains "spotify.com" or tabURL contains "youtube.com" then
-                                        do JavaScript jsCmd in t
+                        })();
+                    "
+                    
+                    if application "Safari" is running then
+                        tell application id "com.apple.Safari"
+                            set winList to every window
+                            repeat with win in winList
+                                set tabList to every tab of win
+                                repeat with t in tabList
+                                    set tabURL to URL of t
+                                    if tabURL is not missing value then
+                                        if tabURL contains "spotify.com" or tabURL contains "youtube.com" then
+                                            do JavaScript jsCmd in t
+                                        end if
                                     end if
-                                end if
+                                end repeat
                             end repeat
-                        end repeat
-                    end tell
-                end if
-                
-                if application "Brave Browser" is running then
-                    tell application "Brave Browser"
-                        set winList to every window
-                        repeat with win in winList
-                            set tabList to every tab of win
-                            repeat with t in tabList
-                                set tabURL to URL of t
-                                if tabURL is not missing value then
-                                    if tabURL contains "spotify.com" or tabURL contains "youtube.com" then
-                                        execute t javascript jsCmd
+                        end tell
+                    end if
+                    
+                    if application "Brave Browser" is running then
+                        tell application "Brave Browser"
+                            set winList to every window
+                            repeat with win in winList
+                                set tabList to every tab of win
+                                repeat with t in tabList
+                                    set tabURL to URL of t
+                                    if tabURL is not missing value then
+                                        if tabURL contains "spotify.com" or tabURL contains "youtube.com" then
+                                            execute t javascript jsCmd
+                                        end if
                                     end if
-                                end if
+                                end repeat
                             end repeat
-                        end repeat
-                    end tell
-                end if
-            end try
-            """
-        }
+                        end tell
+                    end if
+                end try
+                """
+            }
 
-        if let script = NSAppleScript(source: scriptSource) {
-            script.executeAndReturnError(nil)
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.fetchNowPlayingInfo()
+            if let script = NSAppleScript(source: scriptSource) {
+                script.executeAndReturnError(nil)
+            }
+            
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.3) {
+                self?.fetchNowPlayingInfo()
+            }
         }
     }
 }
