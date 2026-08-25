@@ -162,16 +162,48 @@ struct ContentView: View {
                         }
                     }
                     .frame(width: 420, height: expandedHeight)
-                    .transition(.opacity)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.95)),
+                        removal: .opacity.combined(with: .scale(scale: 0.92))
+                    ))
                 } else {
-                    Spacer()
+                    // iOS Compact Dynamic Island Presentation
+                    HStack(spacing: 0) {
+                        // Compact Leading (Mini album artwork or music icon)
+                        if let artwork = mediaManager.artworkImage {
+                            Image(nsImage: artwork)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 17, height: 17)
+                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .padding(.leading, 12)
+                        } else if mediaManager.isPlaying {
+                            Image(systemName: "music.note")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.85))
+                                .padding(.leading, 14)
+                        }
+
+                        Spacer()
+
+                        // Compact Trailing (Equalizer Waveform)
+                        if mediaManager.isPlaying {
+                            CompactEqualizerView()
+                                .padding(.trailing, 14)
+                        }
+                    }
+                    .frame(width: 200, height: collapsedHeight)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.92)),
+                        removal: .opacity.combined(with: .scale(scale: 0.92))
+                    ))
                 }
             }
             .frame(width: isExpanded ? 420 : 200, height: isExpanded ? expandedHeight : collapsedHeight)
             .background(Color.black)
-            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: isExpanded ? 40 : 20, bottomTrailingRadius: isExpanded ? 40 : 20, topTrailingRadius: 0))
-            // Smooth spring animation for the dynamic island feel
-            .animation(.spring(response: 0.4, dampingFraction: 0.6, blendDuration: 0), value: isExpanded)
+            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: isExpanded ? 36 : 18, bottomTrailingRadius: isExpanded ? 36 : 18, topTrailingRadius: 0))
+            // Authentic iOS Dynamic Island spring physics
+            .animation(.spring(response: 0.36, dampingFraction: 0.70, blendDuration: 0), value: isExpanded)
             .contentShape(Rectangle())
             .onHover { hovering in
                 guard hovering else {
@@ -183,8 +215,8 @@ struct ContentView: View {
 
                 isExpanded = true
             }
-            // Add a subtle shadow to the island itself
-            .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 5)
+            // Dynamic island depth shadow
+            .shadow(color: Color.black.opacity(isExpanded ? 0.45 : 0.25), radius: isExpanded ? 16 : 6, x: 0, y: isExpanded ? 6 : 2)
             .contextMenu {
                 Button {
                     showsDockIcon.toggle()
@@ -249,6 +281,30 @@ struct WindowAccessor: NSViewRepresentable {
 
             configuredWindow = window
             onWindowAvailable(window)
+        }
+    }
+}
+
+struct CompactEqualizerView: View {
+    @State private var phase = false
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 1.8) {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color(red: 0.2, green: 0.85, blue: 0.4))
+                .frame(width: 2.2, height: phase ? 11 : 4)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color(red: 0.2, green: 0.85, blue: 0.4))
+                .frame(width: 2.2, height: phase ? 5 : 12)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color(red: 0.2, green: 0.85, blue: 0.4))
+                .frame(width: 2.2, height: phase ? 13 : 6)
+        }
+        .frame(height: 14)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.45).repeatForever(autoreverses: true)) {
+                phase = true
+            }
         }
     }
 }
