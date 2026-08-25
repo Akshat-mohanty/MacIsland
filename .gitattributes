@@ -1,0 +1,9 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Xcode files
+*.pbxproj binary
+*.xcscheme text
+*.xcsettings text
+*.plist text
+*.strings text
