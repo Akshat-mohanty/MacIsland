@@ -9,6 +9,9 @@ class MediaManager {
     var artworkImage: NSImage? = nil
     var isPlaying: Bool = false
     var isYouTube: Bool = false
+    var currentTime: Double = 0
+    var duration: Double = 0
+    var isScrubbing: Bool = false
     
     private var timer: Timer?
     
@@ -36,10 +39,14 @@ class MediaManager {
             let scriptSource = """
             try
                 tell application id "com.spotify.client"
+                    set trackName to (name of current track)
+                    set trackArtist to (artist of current track)
+                    set curPos to (player position)
+                    set curDur to (duration of current track) / 1000
                     if player state is playing then
-                        return "SpotifyNative|" & (name of current track) & "|" & (artist of current track) & "|playing|none"
+                        return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur
                     else
-                        return "SpotifyNative|" & (name of current track) & "|" & (artist of current track) & "|paused|none"
+                        return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur
                     end if
                 end tell
             end try
@@ -51,10 +58,14 @@ class MediaManager {
             let scriptSource = """
             try
                 tell application id "com.apple.Music"
+                    set trackName to (name of current track)
+                    set trackArtist to (artist of current track)
+                    set curPos to (player position)
+                    set curDur to (duration of current track)
                     if player state is playing then
-                        return "MusicNative|" & (name of current track) & "|" & (artist of current track) & "|playing|none"
+                        return "MusicNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur
                     else
-                        return "MusicNative|" & (name of current track) & "|" & (artist of current track) & "|paused|none"
+                        return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur
                     end if
                 end tell
             end try
@@ -68,8 +79,9 @@ class MediaManager {
         try
             set webScraper to "
                 (function() {
-                    var track = null, artist = null, isPlaying = 'paused', imgUrl = '';
+                    var track = null, artist = null, isPlaying = 'paused', imgUrl = '', curPos = 0, curDur = 0;
                     var url = window.location.href;
+                    var media = document.querySelector('video, audio');
                     
                     if (url.includes('spotify.com')) {
                         var t = document.querySelector('[data-testid=\\"context-item-link\\"]');
@@ -81,6 +93,10 @@ class MediaManager {
                             artist = a.innerText.replace(/[\\\\r\\\\n]+/g, ', ');
                             isPlaying = (pb && pb.getAttribute('aria-label') === 'Pause') ? 'playing' : 'paused';
                             imgUrl = img ? img.src : 'https://open.spotifycdn.com/cdn/images/favicon32.b64eff03.png';
+                            if (media) {
+                                curPos = media.currentTime || 0;
+                                curDur = (isFinite(media.duration) && media.duration) ? media.duration : 0;
+                            }
                         }
                     } else if (url.includes('youtube.com')) {
                         var t = document.querySelector('h1.ytd-watch-metadata yt-formatted-string');
@@ -92,11 +108,15 @@ class MediaManager {
                             isPlaying = (v && !v.paused) ? 'playing' : 'paused';
                             var icon = document.querySelector('link[rel*=\\"icon\\"]');
                             imgUrl = icon ? icon.href : 'https://www.youtube.com/favicon.ico';
+                            if (v) {
+                                curPos = v.currentTime || 0;
+                                curDur = (isFinite(v.duration) && v.duration) ? v.duration : 0;
+                            }
                         }
                     }
                     
                     if (track && artist) {
-                        return track.trim() + '|' + artist.trim() + '|' + isPlaying + '|' + imgUrl;
+                        return track.trim() + '|' + artist.trim() + '|' + isPlaying + '|' + imgUrl + '|' + Math.round(curPos) + '|' + Math.round(curDur);
                     }
                     return 'null';
                 })();
@@ -156,6 +176,8 @@ class MediaManager {
                 
                 let sourceApp = parts[0]
                 let imgUrlString = parts[4]
+                let newCurPos = parts.count >= 6 ? (Double(parts[5]) ?? 0) : 0
+                let newDuration = parts.count >= 7 ? (Double(parts[6]) ?? 0) : 0
                 
                 let newIsYouTube = imgUrlString.contains("youtube.com")
                 
@@ -168,7 +190,22 @@ class MediaManager {
                                 self.artist = newArtist
                                 self.isPlaying = newIsPlaying
                                 self.isYouTube = newIsYouTube
+                                if !self.isScrubbing {
+                                    self.currentTime = newCurPos
+                                }
+                                self.duration = newDuration
                                 self.artworkImage = image
+                            }
+                        } else {
+                            await MainActor.run {
+                                self.title = newTitle
+                                self.artist = newArtist
+                                self.isPlaying = newIsPlaying
+                                self.isYouTube = newIsYouTube
+                                if !self.isScrubbing {
+                                    self.currentTime = newCurPos
+                                }
+                                self.duration = newDuration
                             }
                         }
                     }
@@ -191,6 +228,10 @@ class MediaManager {
                             self.artist = newArtist
                             self.isPlaying = newIsPlaying
                             self.isYouTube = newIsYouTube
+                            if !self.isScrubbing {
+                                self.currentTime = newCurPos
+                            }
+                            self.duration = newDuration
                             self.artworkImage = newArtworkImage
                         }
                     }
@@ -211,6 +252,8 @@ class MediaManager {
                 self.isPlaying = false
                 self.artworkImage = nil
                 self.isYouTube = false
+                self.currentTime = 0
+                self.duration = 0
             }
         }
     }
@@ -225,6 +268,83 @@ class MediaManager {
     
     func skipBackward() {
         runControlCommand("previous track")
+    }
+    
+    func seek(to seconds: Double) {
+        self.currentTime = seconds
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let apps = NSWorkspace.shared.runningApplications
+            let hasSpotify = apps.contains { $0.bundleIdentifier == "com.spotify.client" }
+            let hasMusic = apps.contains { $0.bundleIdentifier == "com.apple.Music" }
+
+            var scriptSource = ""
+
+            if hasSpotify {
+                scriptSource = """
+                try
+                    tell application id "com.spotify.client" to set player position to \(seconds)
+                end try
+                """
+            } else if hasMusic {
+                scriptSource = """
+                try
+                    tell application id "com.apple.Music" to set player position to \(seconds)
+                end try
+                """
+            } else {
+                let jsSeek = "(function() { var m = document.querySelector('video, audio'); if (m) { m.currentTime = \(seconds); } })();"
+                scriptSource = """
+                try
+                    if application "Safari" is running then
+                        tell application id "com.apple.Safari"
+                            repeat with win in every window
+                                repeat with t in every tab of win
+                                    set tabURL to URL of t
+                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com") then
+                                        do JavaScript "\(jsSeek)" in t
+                                    end if
+                                end repeat
+                            end repeat
+                        end tell
+                    end if
+                    
+                    if application "Brave Browser" is running then
+                        tell application "Brave Browser"
+                            repeat with win in every window
+                                repeat with t in every tab of win
+                                    set tabURL to URL of t
+                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com") then
+                                        execute t javascript "\(jsSeek)"
+                                    end if
+                                end repeat
+                            end repeat
+                        end tell
+                    end if
+                end try
+                """
+            }
+
+            if let script = NSAppleScript(source: scriptSource) {
+                script.executeAndReturnError(nil)
+            }
+            
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.3) {
+                self?.fetchNowPlayingInfo()
+            }
+        }
+    }
+    
+    static func formatTime(_ seconds: Double) -> String {
+        guard !seconds.isNaN && !seconds.isInfinite && seconds > 0 else { return "0:00" }
+        let totalSec = Int(seconds)
+        let hours = totalSec / 3600
+        let mins = (totalSec % 3600) / 60
+        let secs = totalSec % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, mins, secs)
+        } else {
+            return String(format: "%d:%02d", mins, secs)
+        }
     }
     
     private func runControlCommand(_ command: String) {
@@ -298,7 +418,6 @@ class MediaManager {
                         tell application "Brave Browser"
                             set winList to every window
                             repeat with win in winList
-                                set tabList to every tab of win
                                 repeat with t in tabList
                                     set tabURL to URL of t
                                     if tabURL is not missing value then
