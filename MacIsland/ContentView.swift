@@ -202,8 +202,8 @@ struct ContentView: View {
             .frame(width: isExpanded ? 420 : 200, height: isExpanded ? expandedHeight : collapsedHeight)
             .background(Color.black)
             .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: isExpanded ? 36 : 18, bottomTrailingRadius: isExpanded ? 36 : 18, topTrailingRadius: 0))
-            // Very slow, cinematic spring animation
-            .animation(.spring(response: 1.4, dampingFraction: 0.85, blendDuration: 0), value: isExpanded)
+            // Clean, direct easing curve without lingering spring oscillation
+            .animation(.easeInOut(duration: 0.22), value: isExpanded)
             .contentShape(Rectangle())
             .onHover { hovering in
                 guard hovering else {
