@@ -170,8 +170,8 @@ struct ContentView: View {
             .frame(width: isExpanded ? 420 : 200, height: isExpanded ? expandedHeight : collapsedHeight)
             .background(Color.black)
             .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: isExpanded ? 40 : 20, bottomTrailingRadius: isExpanded ? 40 : 20, topTrailingRadius: 0))
-            // Very smooth and slow spring animation for the dynamic island feel
-            .animation(.spring(response: 0.95, dampingFraction: 0.82, blendDuration: 0), value: isExpanded)
+            // Smooth spring animation for the dynamic island feel
+            .animation(.spring(response: 0.4, dampingFraction: 0.6, blendDuration: 0), value: isExpanded)
             .contentShape(Rectangle())
             .onHover { hovering in
                 guard hovering else {
