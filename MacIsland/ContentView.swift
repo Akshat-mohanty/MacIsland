@@ -56,11 +56,13 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
 
                             // Media Controls
-                            HStack(spacing: 12) {
+                            HStack(spacing: 8) {
                                 Button(action: { mediaManager.skipBackward() }) {
                                     Image(systemName: "backward.fill")
                                         .font(.system(size: 13))
                                         .foregroundColor(.white)
+                                        .frame(width: 28, height: 28)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 
@@ -68,6 +70,8 @@ struct ContentView: View {
                                     Image(systemName: mediaManager.isPlaying ? "pause.fill" : "play.fill")
                                         .font(.system(size: 17))
                                         .foregroundColor(.white)
+                                        .frame(width: 32, height: 28)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                                 
@@ -75,6 +79,8 @@ struct ContentView: View {
                                     Image(systemName: "forward.fill")
                                         .font(.system(size: 13))
                                         .foregroundColor(.white)
+                                        .frame(width: 28, height: 28)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
                             }
