@@ -153,10 +153,10 @@ struct ContentView: View {
                             }
                             .padding(.horizontal, 16)
                             .padding(.bottom, 6)
-                            .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)))
                         }
                     }
-                    .transition(.opacity.combined(with: .scale(scale: 0.9, anchor: .top)))
+                    .frame(width: 420, height: expandedHeight)
+                    .transition(.opacity)
                 } else {
                     Spacer()
                 }
