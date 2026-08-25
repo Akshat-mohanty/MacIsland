@@ -202,8 +202,8 @@ struct ContentView: View {
             .frame(width: isExpanded ? 420 : 200, height: isExpanded ? expandedHeight : collapsedHeight)
             .background(Color.black)
             .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: isExpanded ? 36 : 18, bottomTrailingRadius: isExpanded ? 36 : 18, topTrailingRadius: 0))
-            // Authentic iOS Dynamic Island spring physics
-            .animation(.spring(response: 0.36, dampingFraction: 0.70, blendDuration: 0), value: isExpanded)
+            // Very slow, cinematic spring animation
+            .animation(.spring(response: 1.4, dampingFraction: 0.85, blendDuration: 0), value: isExpanded)
             .contentShape(Rectangle())
             .onHover { hovering in
                 guard hovering else {
