@@ -616,15 +616,6 @@ final class MediaManager: ObservableObject {
         let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
         let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
 
-        if source == "MusicNative" || source == "SpotifyNative" {
-            if let sendCommand = Self.mrSendCommand {
-                let options: [String: Any] = [
-                    "kMRMediaRemoteOptionPlaybackPosition": NSNumber(value: seconds)
-                ]
-                _ = sendCommand(24, options as CFDictionary)
-            }
-        }
-
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var scriptSource = ""
 
@@ -637,7 +628,15 @@ final class MediaManager: ObservableObject {
                 end try
                 """
             } else if source == "MusicNative" {
-                // MediaRemote Command 24 handles Apple Music seeking without triggering AppleScript -10006 restart
+                scriptSource = """
+                try
+                    tell application "Music"
+                        if player state is not stopped then
+                            set player position to \(seconds)
+                        end if
+                    end tell
+                end try
+                """
             } else {
                 let jsSeek = """
                 (function() {
