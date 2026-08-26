@@ -31,7 +31,7 @@ cd MacIsland/MacIsland
 
 ---
 
-## ⚙️ Requirements & Permissions
+##  Requirements & Permissions
 
 - **macOS**: 13.0 (Ventura) or later.
 - **For Browser / Web App Media (Brave / Chrome / Safari)**:
