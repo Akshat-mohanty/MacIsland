@@ -16,53 +16,61 @@ struct ContentView: View {
     @State private var dragSliderTime: Double = 0
     @AppStorage(AppDelegate.showsDockIconKey) private var showsDockIcon = false
     @State private var collapseWorkItem: DispatchWorkItem?
-    private let collapsedHeight: CGFloat = 31
-    private let expandedHeight: CGFloat = 92
+    private let collapsedWidth: CGFloat = 210
+    private let collapsedHeight: CGFloat = 32
+    private let expandedWidth: CGFloat = 430
+    private let expandedHeight: CGFloat = 96
     private let springAnimation: Animation = .spring(response: 0.42, dampingFraction: 0.78, blendDuration: 0)
     
     var body: some View {
         ZStack(alignment: .top) {
-            // Using a completely clear background so the window is transparent
+            // Transparent window base
             Color.clear
             
             // The Island Container
             Group {
                 if isExpanded {
-                    VStack(spacing: 6) {
-                        // Top Row: Artwork + Track Details + Playback Buttons
-                        HStack(alignment: .center, spacing: 10) {
+                    VStack(spacing: 7) {
+                        // Top Row: Artwork + Track Details + Playback Controls
+                        HStack(alignment: .center, spacing: 12) {
                             if let artwork = mediaManager.artworkImage {
                                 Image(nsImage: artwork)
                                     .resizable()
                                     .aspectRatio(contentMode: mediaManager.isYouTube ? .fit : .fill)
-                                    .frame(width: mediaManager.isYouTube ? 32 : 38, height: mediaManager.isYouTube ? 32 : 38)
-                                    .clipShape(RoundedRectangle(cornerRadius: mediaManager.isYouTube ? 4 : 8))
-                                    .frame(width: 38, height: 38)
+                                    .frame(width: mediaManager.isYouTube ? 36 : 42, height: mediaManager.isYouTube ? 36 : 42)
+                                    .clipShape(RoundedRectangle(cornerRadius: mediaManager.isYouTube ? 5 : 8))
+                                    .shadow(color: .white.opacity(0.12), radius: 3)
+                                    .frame(width: 42, height: 42)
                             } else {
-                                Text("🎵")
-                                    .font(.system(size: 24))
-                                    .frame(width: 38, height: 38)
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(Color(white: 0.15))
+                                    Image(systemName: "music.note")
+                                        .font(.system(size: 20))
+                                        .foregroundColor(.white.opacity(0.8))
+                                }
+                                .frame(width: 42, height: 42)
                             }
                         
                             // Track Title and Artist
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 2.5) {
                                 Text(mediaManager.title)
-                                    .font(.system(size: 13, weight: .semibold))
+                                    .font(.system(size: 13.5, weight: .semibold, design: .rounded))
                                     .foregroundColor(.white)
                                     .lineLimit(1)
                                 Text(mediaManager.artist.isEmpty ? "Unknown Artist" : mediaManager.artist)
-                                    .font(.system(size: 11))
-                                    .foregroundColor(.gray)
+                                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                                    .foregroundColor(Color(white: 0.65))
                                     .lineLimit(1)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
 
                             // Media Controls
-                            HStack(spacing: 8) {
+                            HStack(spacing: 6) {
                                 Button(action: { mediaManager.skipBackward() }) {
                                     Image(systemName: "backward.fill")
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.white)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.9))
                                         .frame(width: 28, height: 28)
                                         .contentShape(Rectangle())
                                 }
@@ -70,7 +78,7 @@ struct ContentView: View {
                                 
                                 Button(action: { mediaManager.togglePlayPause() }) {
                                     Image(systemName: mediaManager.isPlaying ? "pause.fill" : "play.fill")
-                                        .font(.system(size: 17))
+                                        .font(.system(size: 17, weight: .bold))
                                         .foregroundColor(.white)
                                         .frame(width: 32, height: 28)
                                         .contentShape(Rectangle())
@@ -79,8 +87,8 @@ struct ContentView: View {
                                 
                                 Button(action: { mediaManager.skipForward() }) {
                                     Image(systemName: "forward.fill")
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.white)
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(.white.opacity(0.9))
                                         .frame(width: 28, height: 28)
                                         .contentShape(Rectangle())
                                 }
@@ -88,15 +96,15 @@ struct ContentView: View {
                             }
                         }
                         .padding(.horizontal, 16)
-                        .padding(.top, 8)
+                        .padding(.top, 9)
 
-                        // Bottom Row: Scrubber / Slidebar (always displayed when duration > 0)
+                        // Bottom Row: Scrubber / Progress Bar
                         if mediaManager.duration > 0 {
                             HStack(spacing: 8) {
                                 Text(MediaManager.formatTime(isDraggingSlider ? dragSliderTime : mediaManager.currentTime))
                                     .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.gray)
-                                    .frame(width: 36, alignment: .leading)
+                                    .foregroundColor(Color(white: 0.55))
+                                    .frame(width: 34, alignment: .leading)
 
                                 GeometryReader { geometry in
                                     let totalWidth = geometry.size.width
@@ -107,7 +115,7 @@ struct ContentView: View {
                                     ZStack(alignment: .leading) {
                                         // Background track
                                         Capsule()
-                                            .fill(Color.white.opacity(0.2))
+                                            .fill(Color.white.opacity(0.22))
                                             .frame(height: isHoveringSlider || isDraggingSlider ? 5 : 3.5)
 
                                         // Progress filled track
@@ -119,7 +127,7 @@ struct ContentView: View {
                                         Circle()
                                             .fill(Color.white)
                                             .frame(width: 9, height: 9)
-                                            .shadow(color: .black.opacity(0.5), radius: 2)
+                                            .shadow(color: .black.opacity(0.45), radius: 2)
                                             .offset(x: max(0, min(currentPos - 4.5, totalWidth - 9)))
                                             .opacity(isHoveringSlider || isDraggingSlider ? 1 : 0)
                                     }
@@ -156,58 +164,58 @@ struct ContentView: View {
 
                                 Text(MediaManager.formatTime(mediaManager.duration))
                                     .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.gray)
-                                    .frame(width: 36, alignment: .trailing)
+                                    .foregroundColor(Color(white: 0.55))
+                                    .frame(width: 34, alignment: .trailing)
                             }
                             .padding(.horizontal, 16)
-                            .padding(.bottom, 6)
+                            .padding(.bottom, 7)
                         }
                     }
-                    .frame(width: 420, height: expandedHeight)
+                    .frame(width: expandedWidth, height: expandedHeight)
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .scale(scale: 0.95)),
                         removal: .opacity.combined(with: .scale(scale: 0.92))
                     ))
                 } else {
-                    // iOS Compact Dynamic Island Presentation
+                    // Compact Notch View
                     HStack(spacing: 0) {
-                        // Compact Leading (Mini album artwork or music icon)
+                        // Leading Artwork / Music Icon
                         if let artwork = mediaManager.artworkImage {
                             Image(nsImage: artwork)
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
-                                .frame(width: 17, height: 17)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
+                                .frame(width: 18, height: 18)
+                                .clipShape(RoundedRectangle(cornerRadius: 4.5))
                                 .padding(.leading, 12)
                         } else if mediaManager.isPlaying {
                             Image(systemName: "music.note")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: 11.5, weight: .semibold))
                                 .foregroundColor(.white.opacity(0.85))
-                                .padding(.leading, 14)
+                                .padding(.leading, 13)
                         }
 
                         Spacer()
 
-                        // Compact Trailing (Equalizer Waveform)
+                        // Trailing Animated Audio Spectrum
                         if mediaManager.isPlaying {
-                            CompactEqualizerView()
-                                .padding(.trailing, 14)
+                            AudioSpectrumView()
+                                .padding(.trailing, 13)
                         }
                     }
-                    .frame(width: 200, height: collapsedHeight)
+                    .frame(width: collapsedWidth, height: collapsedHeight)
                     .transition(.asymmetric(
                         insertion: .opacity.combined(with: .scale(scale: 0.92)),
                         removal: .opacity.combined(with: .scale(scale: 0.92))
                     ))
                 }
             }
-            .frame(width: isExpanded ? 420 : 200, height: isExpanded ? expandedHeight : collapsedHeight)
+            .frame(width: isExpanded ? expandedWidth : collapsedWidth, height: isExpanded ? expandedHeight : collapsedHeight)
             .background(Color.black)
             .clipShape(
                 UnevenRoundedRectangle(
                     topLeadingRadius: 0,
-                    bottomLeadingRadius: isExpanded ? 24 : 14,
-                    bottomTrailingRadius: isExpanded ? 24 : 14,
+                    bottomLeadingRadius: isExpanded ? 26 : 14,
+                    bottomTrailingRadius: isExpanded ? 26 : 14,
                     topTrailingRadius: 0
                 )
             )
@@ -232,7 +240,7 @@ struct ContentView: View {
                 }
             }
             // Dynamic island depth shadow
-            .shadow(color: Color.black.opacity(isExpanded ? 0.5 : 0.25), radius: isExpanded ? 16 : 6, x: 0, y: isExpanded ? 6 : 2)
+            .shadow(color: Color.black.opacity(isExpanded ? 0.55 : 0.28), radius: isExpanded ? 18 : 6, x: 0, y: isExpanded ? 6 : 2)
             .contextMenu {
                 Button {
                     showsDockIcon.toggle()
@@ -301,25 +309,42 @@ struct WindowAccessor: NSViewRepresentable {
     }
 }
 
-struct CompactEqualizerView: View {
-    @State private var phase = false
+struct AudioSpectrumView: View {
+    @State private var phase1: CGFloat = 0.4
+    @State private var phase2: CGFloat = 0.8
+    @State private var phase3: CGFloat = 0.3
+    @State private var phase4: CGFloat = 0.9
+
+    private let greenColor = Color(red: 0.22, green: 0.86, blue: 0.45)
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 1.8) {
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color(red: 0.2, green: 0.85, blue: 0.4))
-                .frame(width: 2.2, height: phase ? 11 : 4)
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color(red: 0.2, green: 0.85, blue: 0.4))
-                .frame(width: 2.2, height: phase ? 5 : 12)
-            RoundedRectangle(cornerRadius: 1)
-                .fill(Color(red: 0.2, green: 0.85, blue: 0.4))
-                .frame(width: 2.2, height: phase ? 13 : 6)
+        HStack(alignment: .bottom, spacing: 2) {
+            RoundedRectangle(cornerRadius: 1.2)
+                .fill(greenColor)
+                .frame(width: 2.2, height: 3 + phase1 * 10)
+            RoundedRectangle(cornerRadius: 1.2)
+                .fill(greenColor)
+                .frame(width: 2.2, height: 3 + phase2 * 11)
+            RoundedRectangle(cornerRadius: 1.2)
+                .fill(greenColor)
+                .frame(width: 2.2, height: 3 + phase3 * 10)
+            RoundedRectangle(cornerRadius: 1.2)
+                .fill(greenColor)
+                .frame(width: 2.2, height: 3 + phase4 * 11)
         }
-        .frame(height: 14)
+        .frame(height: 15)
         .onAppear {
-            withAnimation(.easeInOut(duration: 0.45).repeatForever(autoreverses: true)) {
-                phase = true
+            withAnimation(.easeInOut(duration: 0.38).repeatForever(autoreverses: true)) {
+                phase1 = 0.95
+            }
+            withAnimation(.easeInOut(duration: 0.48).repeatForever(autoreverses: true)) {
+                phase2 = 0.25
+            }
+            withAnimation(.easeInOut(duration: 0.42).repeatForever(autoreverses: true)) {
+                phase3 = 1.0
+            }
+            withAnimation(.easeInOut(duration: 0.52).repeatForever(autoreverses: true)) {
+                phase4 = 0.2
             }
         }
     }
