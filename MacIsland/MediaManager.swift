@@ -430,7 +430,13 @@ final class MediaManager: ObservableObject {
             }
         }
 
-        // 3. Actively playing MediaRemote (covers installed Netflix web app / PWA, QuickTime, Podcasts, etc.)
+        // 3. Installed Netflix Safari Web App / Actively playing MediaRemote
+        let hasNetflixWebApp = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
+            return id.contains("Safari.WebApp") || name.localizedCaseInsensitiveContains("netflix") || id.localizedCaseInsensitiveContains("netflix")
+        }
+
         if let getInfo = Self.mrGetNowPlayingInfo {
             let sema = DispatchSemaphore(value: 0)
             var mediaRemoteActive = false
@@ -442,6 +448,8 @@ final class MediaManager: ObservableObject {
                     
                     if rate > 0 && !title.isEmpty {
                         mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
+                    } else if hasNetflixWebApp && (title.localizedCaseInsensitiveContains("netflix") || d["kMRMediaRemoteNowPlayingInfoArtworkData"] != nil) {
+                        mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
                     }
                 }
                 sema.signal()
@@ -451,6 +459,21 @@ final class MediaManager: ObservableObject {
             if mediaRemoteActive {
                 return
             }
+        }
+        
+        if hasNetflixWebApp {
+            Task { @MainActor in
+                self.consecutiveNotPlayingCount = 0
+                self.currentSource = "NetflixSafariWebApp"
+                self.title = "Netflix"
+                self.artist = "Netflix"
+                self.isPlaying = true
+                self.isYouTube = false
+                self.isNetflix = true
+                self.mediaService = .netflix
+                self.loadAppIcon(for: "NetflixSafariWebApp")
+            }
+            return
         }
 
         // 4. Paused browser tabs (only for currently running browsers)
@@ -1019,13 +1042,29 @@ final class MediaManager: ObservableObject {
                     tell application "Music" to \(command)
                 end try
                 """
-            } else if source == "NetflixApp" || source == "MediaRemote" {
+            } else if source == "NetflixSafariWebApp" || source == "NetflixApp" || source == "MediaRemote" {
                 let cmdCode: Int32
                 if command == "playpause" { cmdCode = 2 }
                 else if command == "next track" { cmdCode = 4 }
                 else if command == "previous track" { cmdCode = 5 }
                 else { cmdCode = 2 }
                 _ = Self.mrSendCommand?(cmdCode, nil)
+                
+                let keyCode: Int
+                if command == "playpause" { keyCode = 49 }
+                else if command == "next track" { keyCode = 124 }
+                else { keyCode = 123 }
+                
+                let keyScript = """
+                try
+                    tell application "System Events"
+                        tell (first process whose name is "Web App" or bundle identifier contains "Safari.WebApp" or name is "Netflix")
+                            key code \(keyCode)
+                        end tell
+                    end tell
+                end try
+                """
+                _ = NSAppleScript(source: keyScript)?.executeAndReturnError(nil)
             } else {
                 let jsCmd = """
                 (function() {
