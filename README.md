@@ -1,10 +1,10 @@
-# MacIsland 🏝️
+# MacIsland
 
 **MacIsland** brings an authentic Apple Dynamic Island experience to macOS. It sits seamlessly at the top of your screen, contouring around the MacBook notch or display bezel, providing real-time "Now Playing" media information, interactive scrubbing, and media controls without stealing window focus.
 
 ---
 
-## ✨ Features
+##  Features
 
 - **Authentic Apple Notch Design**: Precise concave top ears and squircle curves matching the physical MacBook Pro display bezel.
 - **System-Wide & Desktop Media Support**: Native detection and playback controls for **Apple Music** and **Spotify Desktop**.
@@ -17,7 +17,7 @@
 
 ---
 
-## 🚀 Quick Start (Running from Source)
+##  Quick Start (Running from Source)
 
 ### Option 1: 1-Click Terminal Command *(Recommended)*
 
@@ -30,17 +30,6 @@ cd MacIsland/MacIsland
 ```
 
 `./run.sh` will automatically build the project and launch **MacIsland** in the background.
-
----
-
-### Option 2: Open in Xcode
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/Akshat-mohanty/MacIsland.git
-   ```
-2. Open `MacIsland.xcodeproj` in **Xcode**.
-3. Press **`Cmd + R`** (or click the **Play** button at the top) to build and run.
 
 ---
 
