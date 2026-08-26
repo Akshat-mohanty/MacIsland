@@ -87,33 +87,14 @@ final class MediaManager: ObservableObject {
     func fetchNowPlayingInfo() {
         let runningApps = NSWorkspace.shared.runningApplications
         
+        // Strict bundle identifier matching to NEVER launch an unopen or uninstalled app
         let hasSpotify = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
         let hasMusic = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
-        let hasBrave = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix")
-        }
-        let hasChrome = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name.localizedCaseInsensitiveContains("Chrome") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix") || id.localizedCaseInsensitiveContains("netflix")
-        }
-        let hasArc = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "company.thebrowser.Browser" || name == "Arc" || name.localizedCaseInsensitiveContains("Arc")
-        }
-        let hasSafari = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.apple.Safari" || id.hasPrefix("com.apple.Safari.WebApp") || name == "Safari" || name.localizedCaseInsensitiveContains("Safari") || name.localizedCaseInsensitiveContains("Netflix")
-        }
-        let hasEdge = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name.localizedCaseInsensitiveContains("Edge") || name.localizedCaseInsensitiveContains("Netflix")
-        }
+        let hasBrave = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.brave.Browser" }
+        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
+        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
+        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.microsoft.edgemac" }
 
         let rawScraper = """
         (function() {
@@ -151,7 +132,7 @@ final class MediaManager: ObservableObject {
                 var img = document.querySelector('img[data-testid="cover-art-image"]') || document.querySelector('img[data-testid="context-item-image"]');
                 if (t && art) {
                     track = t.innerText;
-                    artist = art.innerText.replace(/[\\\\r\\\\n]+/g, ', ');
+                    artist = art.innerText.replace(/[\\r\\n]+/g, ', ');
                     isPlaying = (pb && pb.getAttribute('aria-label') === 'Pause') ? 'playing' : 'paused';
                     imgUrl = img ? img.src : '';
                 }
@@ -205,16 +186,16 @@ final class MediaManager: ObservableObject {
                 }
 
                 showName = showName
-                    .replace(/^Watch\\\\s+/i, '')
-                    .replace(/\\\\s*[\\\\|\\\\-–—]\\\\s*Netflix.*$/i, '')
-                    .replace(/^Netflix\\\\s*[\\\\|\\\\-–—]\\\\s*/i, '')
+                    .replace(/^Watch\\s+/i, '')
+                    .replace(/\\s*[\\|\\-–—]\\s*Netflix.*$/i, '')
+                    .replace(/^Netflix\\s*[\\|\\-–—]\\s*/i, '')
                     .trim();
 
                 if (episodeName) {
                     episodeName = episodeName
-                        .replace(/^Watch\\\\s+/i, '')
-                        .replace(/\\\\s*[\\\\|\\\\-–—]\\\\s*Netflix.*$/i, '')
-                        .replace(/^Netflix\\\\s*[\\\\|\\\\-–—]\\\\s*/i, '')
+                        .replace(/^Watch\\s+/i, '')
+                        .replace(/\\s*[\\|\\-–—]\\s*Netflix.*$/i, '')
+                        .replace(/^Netflix\\s*[\\|\\-–—]\\s*/i, '')
                         .trim();
                 }
 
@@ -353,7 +334,7 @@ final class MediaManager: ObservableObject {
             }
         }
 
-        // 2. Actively playing browser tabs
+        // 2. Actively playing browser tabs (only for currently running browsers)
         for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
             let src = """
             set webScraper to "\(escapedScraper)"
@@ -404,7 +385,26 @@ final class MediaManager: ObservableObject {
             }
         }
 
-        // 3. Paused browser tabs
+        // 3. Actively playing MediaRemote (covers installed Netflix web app / PWA, QuickTime, Podcasts, etc.)
+        if let getInfo = Self.mrGetNowPlayingInfo {
+            let sema = DispatchSemaphore(value: 0)
+            var mediaRemoteActive = false
+            getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                if let d = dict as? [String: Any], let self = self {
+                    let rate = d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0
+                    if rate > 0 {
+                        mediaRemoteActive = self.parseMediaRemoteInfo(d)
+                    }
+                }
+                sema.signal()
+            }
+            _ = sema.wait(timeout: .now() + 0.12)
+            if mediaRemoteActive {
+                return
+            }
+        }
+
+        // 4. Paused browser tabs (only for currently running browsers)
         for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
             let src = """
             set webScraper to "\(escapedScraper)"
@@ -455,7 +455,7 @@ final class MediaManager: ObservableObject {
             }
         }
 
-        // 4. Paused native apps
+        // 5. Paused native apps
         if hasSpotify {
             let src = """
             try
@@ -510,110 +510,208 @@ final class MediaManager: ObservableObject {
             }
         }
 
+        // 6. Paused MediaRemote (if any)
+        if let getInfo = Self.mrGetNowPlayingInfo {
+            let sema = DispatchSemaphore(value: 0)
+            var mediaRemoteHandled = false
+            getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                if let d = dict as? [String: Any], let self = self {
+                    mediaRemoteHandled = self.parseMediaRemoteInfo(d)
+                }
+                sema.signal()
+            }
+            _ = sema.wait(timeout: .now() + 0.12)
+            if mediaRemoteHandled {
+                return
+            }
+        }
+
         setNotPlaying()
     }
     
     private static let artworkCache = NSCache<NSString, NSImage>()
     private var consecutiveNotPlayingCount = 0
     
+    private func parseMediaRemoteInfo(_ d: [String: Any]) -> Bool {
+        let rawTitle = (d["kMRMediaRemoteNowPlayingInfoTitle"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawTitle.isEmpty else { return false }
+        
+        let rate = d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0
+        let duration = d["kMRMediaRemoteNowPlayingInfoDuration"] as? Double ?? 0
+        let elapsed = d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0
+        let timestamp = d["kMRMediaRemoteNowPlayingInfoTimestamp"] as? Date ?? Date()
+        let rawArtist = (d["kMRMediaRemoteNowPlayingInfoArtist"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawAlbum = (d["kMRMediaRemoteNowPlayingInfoAlbum"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        var title = rawTitle
+        var artist = rawArtist
+        var service: MediaService = .other
+        
+        let isNetflix = title.localizedCaseInsensitiveContains("Netflix") ||
+                        artist.localizedCaseInsensitiveContains("Netflix") ||
+                        rawAlbum.localizedCaseInsensitiveContains("Netflix") ||
+                        NSWorkspace.shared.runningApplications.contains(where: {
+                            ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("netflix") ||
+                            ($0.localizedName ?? "").localizedCaseInsensitiveContains("netflix")
+                        })
+        
+        if isNetflix {
+            service = .netflix
+            title = title
+                .replacingOccurrences(of: " - Netflix", with: "", options: .caseInsensitive)
+                .replacingOccurrences(of: " | Netflix", with: "", options: .caseInsensitive)
+                .replacingOccurrences(of: "Watch ", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            
+            if title.lowercased() == "home" || title.lowercased() == "browse" || title.isEmpty {
+                // If just browsing and not playing, don't show as playing
+                if rate == 0 {
+                    return false
+                }
+                title = "Netflix"
+            }
+            if artist.isEmpty {
+                artist = rawAlbum.isEmpty ? "Netflix" : rawAlbum
+            }
+        } else if title.localizedCaseInsensitiveContains("YouTube") || artist.localizedCaseInsensitiveContains("YouTube") {
+            service = .youtube
+        } else if title.localizedCaseInsensitiveContains("Spotify") || artist.localizedCaseInsensitiveContains("Spotify") {
+            service = .spotify
+        } else if title.localizedCaseInsensitiveContains("Apple Music") || artist.localizedCaseInsensitiveContains("Apple Music") {
+            service = .appleMusic
+        } else if rate == 0 && duration == 0 {
+            return false
+        }
+        
+        var artwork: NSImage? = nil
+        if let artData = d["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data, let img = NSImage(data: artData) {
+            artwork = img
+        }
+        
+        let timeSince = Date().timeIntervalSince(timestamp)
+        let calculatedPos = max(0, rate > 0 ? (elapsed + timeSince * rate) : elapsed)
+        let currentPos = duration > 0 ? min(calculatedPos, duration) : calculatedPos
+        
+        Task { @MainActor in
+            self.consecutiveNotPlayingCount = 0
+            self.currentSource = service == .netflix ? "NetflixApp" : "MediaRemote"
+            self.title = title
+            self.artist = artist
+            self.isPlaying = rate > 0
+            self.isYouTube = service == .youtube
+            self.isNetflix = service == .netflix
+            self.mediaService = service
+            if !self.isScrubbing && Date() >= self.seekLockUntil {
+                self.currentTime = currentPos
+            }
+            self.duration = duration
+            if let artwork = artwork {
+                self.artworkImage = artwork
+            } else {
+                self.loadAppIcon(for: self.currentSource)
+            }
+        }
+        return true
+    }
+    
     private func executeScriptAndParse(_ resultString: String) {
         guard !resultString.isEmpty else {
             setNotPlaying()
             return
         }
-            let parts = resultString.components(separatedBy: "|")
-            if parts.count >= 5 {
-                let sourceApp = parts[0]
-                let newTitle = parts[1].isEmpty ? "Unknown" : parts[1]
-                let newArtist = parts[2]
-                let newIsPlaying = (parts[3] == "playing")
-                let imgUrlString = parts[4]
-                let newCurPos = parts.count >= 6 ? (Double(parts[5]) ?? 0) : 0
-                let newDuration = parts.count >= 7 ? (Double(parts[6]) ?? 0) : 0
-                
-                let newIsYouTube = imgUrlString.contains("youtube.com") || imgUrlString.contains("ytimg.com") || imgUrlString.contains("youtu.be") || sourceApp.contains("YouTube")
-                let newIsNetflix = sourceApp.localizedCaseInsensitiveContains("Netflix") || imgUrlString.contains("netflix.com") || imgUrlString.contains("nflxso.net") || imgUrlString.contains("nflxext.com")
-                
-                let serviceTag = parts.count >= 8 ? parts[7].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : ""
-                let newService: MediaService
-                if serviceTag == "spotify" || sourceApp == "SpotifyNative" || imgUrlString.contains("spotify.com") {
-                    newService = .spotify
-                } else if serviceTag == "youtube" || newIsYouTube {
-                    newService = .youtube
-                } else if serviceTag == "applemusic" || sourceApp == "MusicNative" {
-                    newService = .appleMusic
-                } else if serviceTag == "netflix" || newIsNetflix {
-                    newService = .netflix
-                } else {
-                    newService = .other
-                }
-                
-                Task { @MainActor in
-                    self.consecutiveNotPlayingCount = 0
-                    self.currentSource = sourceApp
-                    self.title = newTitle
-                    self.artist = newArtist
-                    self.isPlaying = newIsPlaying
-                    self.isYouTube = newService == .youtube
-                    self.isNetflix = newService == .netflix
-                    self.mediaService = newService
-                    if !self.isScrubbing && Date() >= self.seekLockUntil {
-                        if sourceApp != "MusicNative" || newCurPos > 0 {
-                            self.currentTime = newCurPos
-                        }
+        let parts = resultString.components(separatedBy: "|")
+        if parts.count >= 5 {
+            let sourceApp = parts[0]
+            let newTitle = parts[1].isEmpty ? "Unknown" : parts[1]
+            let newArtist = parts[2]
+            let newIsPlaying = (parts[3] == "playing")
+            let imgUrlString = parts[4]
+            let newCurPos = parts.count >= 6 ? (Double(parts[5]) ?? 0) : 0
+            let newDuration = parts.count >= 7 ? (Double(parts[6]) ?? 0) : 0
+            
+            let newIsYouTube = imgUrlString.contains("youtube.com") || imgUrlString.contains("ytimg.com") || imgUrlString.contains("youtu.be") || sourceApp.contains("YouTube")
+            let newIsNetflix = sourceApp.localizedCaseInsensitiveContains("Netflix") || imgUrlString.contains("netflix.com") || imgUrlString.contains("nflxso.net") || imgUrlString.contains("nflxext.com")
+            
+            let serviceTag = parts.count >= 8 ? parts[7].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : ""
+            let newService: MediaService
+            if serviceTag == "spotify" || sourceApp == "SpotifyNative" || imgUrlString.contains("spotify.com") {
+                newService = .spotify
+            } else if serviceTag == "youtube" || newIsYouTube {
+                newService = .youtube
+            } else if serviceTag == "applemusic" || sourceApp == "MusicNative" {
+                newService = .appleMusic
+            } else if serviceTag == "netflix" || newIsNetflix {
+                newService = .netflix
+            } else {
+                newService = .other
+            }
+            
+            Task { @MainActor in
+                self.consecutiveNotPlayingCount = 0
+                self.currentSource = sourceApp
+                self.title = newTitle
+                self.artist = newArtist
+                self.isPlaying = newIsPlaying
+                self.isYouTube = newService == .youtube
+                self.isNetflix = newService == .netflix
+                self.mediaService = newService
+                if !self.isScrubbing && Date() >= self.seekLockUntil {
+                    if sourceApp != "MusicNative" || newCurPos > 0 {
+                        self.currentTime = newCurPos
                     }
-                    self.duration = newDuration
-                    
-                    if imgUrlString != "none" && !imgUrlString.isEmpty {
-                        if let cached = Self.artworkCache.object(forKey: imgUrlString as NSString) {
-                            self.artworkImage = cached
-                        } else {
-                            if let url = URL(string: imgUrlString) {
-                                self.lastArtworkURL = imgUrlString
-                                var request = URLRequest(url: url)
-                                request.timeoutInterval = 8.0
-                                URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
-                                    guard let self = self, let data = data, let img = NSImage(data: data) else { return }
-                                    Self.artworkCache.setObject(img, forKey: imgUrlString as NSString)
-                                    Task { @MainActor in
-                                        if self.lastArtworkURL == imgUrlString || self.artworkImage == nil {
-                                            self.artworkImage = img
-                                        }
-                                    }
-                                }.resume()
-                            }
-                        }
+                }
+                self.duration = newDuration
+                
+                if imgUrlString != "none" && !imgUrlString.isEmpty {
+                    if let cached = Self.artworkCache.object(forKey: imgUrlString as NSString) {
+                        self.artworkImage = cached
                     } else {
-                        self.lastArtworkURL = ""
-                        self.loadAppIcon(for: sourceApp)
-                    }
-                }
-
-                if sourceApp == "MusicNative" || (sourceApp == "SpotifyNative" && newCurPos == 0) {
-                    if let getInfo = Self.mrGetNowPlayingInfo {
-                        getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
-                            guard let self = self, let d = dict as? [String: Any] else { return }
-                            let elapsed = d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0
-                            let rate = d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? (newIsPlaying ? 1.0 : 0.0)
-                            let timestamp = d["kMRMediaRemoteNowPlayingInfoTimestamp"] as? Date ?? Date()
-                            let timeSince = Date().timeIntervalSince(timestamp)
-                            let calculatedPos = max(0, rate > 0 ? (elapsed + timeSince * rate) : elapsed)
-                            
-                            Task { @MainActor in
-                                if !self.isScrubbing && Date() >= self.seekLockUntil {
-                                    if self.duration > 0 {
-                                        self.currentTime = min(calculatedPos, self.duration)
-                                    } else {
-                                        self.currentTime = calculatedPos
+                        if let url = URL(string: imgUrlString) {
+                            self.lastArtworkURL = imgUrlString
+                            var request = URLRequest(url: url)
+                            request.timeoutInterval = 8.0
+                            URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+                                guard let self = self, let data = data, let img = NSImage(data: data) else { return }
+                                Self.artworkCache.setObject(img, forKey: imgUrlString as NSString)
+                                Task { @MainActor in
+                                    if self.lastArtworkURL == imgUrlString || self.artworkImage == nil {
+                                        self.artworkImage = img
                                     }
+                                }
+                            }.resume()
+                        }
+                    }
+                } else {
+                    self.lastArtworkURL = ""
+                    self.loadAppIcon(for: sourceApp)
+                }
+            }
+
+            if sourceApp == "MusicNative" || (sourceApp == "SpotifyNative" && newCurPos == 0) {
+                if let getInfo = Self.mrGetNowPlayingInfo {
+                    getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                        guard let self = self, let d = dict as? [String: Any] else { return }
+                        let elapsed = d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0
+                        let rate = d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? (newIsPlaying ? 1.0 : 0.0)
+                        let timestamp = d["kMRMediaRemoteNowPlayingInfoTimestamp"] as? Date ?? Date()
+                        let timeSince = Date().timeIntervalSince(timestamp)
+                        let calculatedPos = max(0, rate > 0 ? (elapsed + timeSince * rate) : elapsed)
+                        
+                        Task { @MainActor in
+                            if !self.isScrubbing && Date() >= self.seekLockUntil {
+                                if self.duration > 0 {
+                                    self.currentTime = min(calculatedPos, self.duration)
+                                } else {
+                                    self.currentTime = calculatedPos
                                 }
                             }
                         }
                     }
                 }
-            } else {
-                setNotPlaying()
             }
+        } else {
+            setNotPlaying()
+        }
     }
     
     private func loadAppIcon(for sourceApp: String) {
@@ -705,27 +803,12 @@ final class MediaManager: ObservableObject {
         self.seekLockUntil = Date().addingTimeInterval(1.2)
         let source = self.currentSource
         let runningApps = NSWorkspace.shared.runningApplications
-        let hasBrave = runningApps.contains { app in
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix")
-        }
-        let hasChrome = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name.localizedCaseInsensitiveContains("Chrome") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix") || id.localizedCaseInsensitiveContains("netflix")
-        }
-        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" || ($0.localizedName ?? "") == "Arc" }
-        let hasEdge = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name.localizedCaseInsensitiveContains("Edge") || name.localizedCaseInsensitiveContains("Netflix")
-        }
-        let hasSafari = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.apple.Safari" || id.hasPrefix("com.apple.Safari.WebApp") || name.localizedCaseInsensitiveContains("Safari") || name.localizedCaseInsensitiveContains("Netflix")
-        }
+        
+        let hasBrave = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.brave.Browser" }
+        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
+        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.microsoft.edgemac" }
+        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var scriptSource = ""
@@ -748,6 +831,11 @@ final class MediaManager: ObservableObject {
                     end tell
                 end try
                 """
+            } else if source == "NetflixApp" || source == "MediaRemote" {
+                if let sendCmd = Self.mrSendCommand {
+                    let dict: [String: Any] = ["kMRMediaRemoteOptionPlaybackPosition": seconds]
+                    _ = sendCmd(11, dict as CFDictionary)
+                }
             } else {
                 let jsSeek = """
                 (function() {
@@ -815,7 +903,7 @@ final class MediaManager: ObservableObject {
                 }
             }
 
-            if let script = NSAppleScript(source: scriptSource) {
+            if !scriptSource.isEmpty, let script = NSAppleScript(source: scriptSource) {
                 script.executeAndReturnError(nil)
             }
             
@@ -841,27 +929,12 @@ final class MediaManager: ObservableObject {
     private func runControlCommand(_ command: String) {
         let source = self.currentSource
         let runningApps = NSWorkspace.shared.runningApplications
-        let hasBrave = runningApps.contains { app in
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix")
-        }
-        let hasChrome = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name.localizedCaseInsensitiveContains("Chrome") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix") || id.localizedCaseInsensitiveContains("netflix")
-        }
-        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" || ($0.localizedName ?? "") == "Arc" }
-        let hasEdge = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name.localizedCaseInsensitiveContains("Edge") || name.localizedCaseInsensitiveContains("Netflix")
-        }
-        let hasSafari = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id == "com.apple.Safari" || id.hasPrefix("com.apple.Safari.WebApp") || name.localizedCaseInsensitiveContains("Safari") || name.localizedCaseInsensitiveContains("Netflix")
-        }
+        
+        let hasBrave = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.brave.Browser" }
+        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
+        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.microsoft.edgemac" }
+        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var scriptSource = ""
@@ -878,6 +951,13 @@ final class MediaManager: ObservableObject {
                     tell application "Music" to \(command)
                 end try
                 """
+            } else if source == "NetflixApp" || source == "MediaRemote" {
+                let cmdCode: Int32
+                if command == "playpause" { cmdCode = 2 }
+                else if command == "next track" { cmdCode = 4 }
+                else if command == "previous track" { cmdCode = 5 }
+                else { cmdCode = 2 }
+                _ = Self.mrSendCommand?(cmdCode, nil)
             } else {
                 let jsCmd = """
                 (function() {
@@ -980,7 +1060,7 @@ final class MediaManager: ObservableObject {
                 }
             }
 
-            if let script = NSAppleScript(source: scriptSource) {
+            if !scriptSource.isEmpty, let script = NSAppleScript(source: scriptSource) {
                 script.executeAndReturnError(nil)
             }
             
