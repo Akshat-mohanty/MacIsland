@@ -7,6 +7,7 @@ enum MediaService: String, Sendable {
     case spotify
     case youtube
     case appleMusic
+    case netflix
     case other
 }
 
@@ -16,6 +17,7 @@ final class MediaManager: ObservableObject {
     @Published var artworkImage: NSImage? = nil
     @Published var isPlaying: Bool = false
     @Published var isYouTube: Bool = false
+    @Published var isNetflix: Bool = false
     @Published var mediaService: MediaService = .other
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
@@ -28,8 +30,8 @@ final class MediaManager: ObservableObject {
             return Color(red: 0.22, green: 0.86, blue: 0.45) // Spotify Green
         case .youtube:
             return Color(red: 240/255.0, green: 179/255.0, blue: 36/255.0) // YouTube #f0b324
-        case .appleMusic:
-            return Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) // Apple Music Red
+        case .appleMusic, .netflix:
+            return Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) // Apple Music / Netflix Red
         case .other:
             return Color(red: 0.22, green: 0.86, blue: 0.45)
         }
@@ -90,27 +92,27 @@ final class MediaManager: ObservableObject {
         let hasBrave = runningApps.contains {
             let id = $0.bundleIdentifier ?? ""
             let name = $0.localizedName ?? ""
-            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name == "YouTube" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube")
+            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix")
         }
         let hasChrome = runningApps.contains {
             let id = $0.bundleIdentifier ?? ""
             let name = $0.localizedName ?? ""
-            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name.localizedCaseInsensitiveContains("Chrome")
+            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name.localizedCaseInsensitiveContains("Chrome") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix") || id.localizedCaseInsensitiveContains("netflix")
         }
         let hasArc = runningApps.contains {
             let id = $0.bundleIdentifier ?? ""
             let name = $0.localizedName ?? ""
-            return id == "company.thebrowser.Browser" || name == "Arc"
+            return id == "company.thebrowser.Browser" || name == "Arc" || name.localizedCaseInsensitiveContains("Arc")
         }
         let hasSafari = runningApps.contains {
             let id = $0.bundleIdentifier ?? ""
             let name = $0.localizedName ?? ""
-            return id == "com.apple.Safari" || name == "Safari"
+            return id == "com.apple.Safari" || id.hasPrefix("com.apple.Safari.WebApp") || name == "Safari" || name.localizedCaseInsensitiveContains("Safari") || name.localizedCaseInsensitiveContains("Netflix")
         }
         let hasEdge = runningApps.contains {
             let id = $0.bundleIdentifier ?? ""
             let name = $0.localizedName ?? ""
-            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name.localizedCaseInsensitiveContains("Edge")
+            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name.localizedCaseInsensitiveContains("Edge") || name.localizedCaseInsensitiveContains("Netflix")
         }
 
         let rawScraper = """
@@ -149,7 +151,7 @@ final class MediaManager: ObservableObject {
                 var img = document.querySelector('img[data-testid="cover-art-image"]') || document.querySelector('img[data-testid="context-item-image"]');
                 if (t && art) {
                     track = t.innerText;
-                    artist = art.innerText.replace(/[\\r\\n]+/g, ', ');
+                    artist = art.innerText.replace(/[\\\\r\\\\n]+/g, ', ');
                     isPlaying = (pb && pb.getAttribute('aria-label') === 'Pause') ? 'playing' : 'paused';
                     imgUrl = img ? img.src : '';
                 }
@@ -166,6 +168,79 @@ final class MediaManager: ObservableObject {
                         if (p1.length === 2) curPos = p1[0] * 60 + p1[1];
                         if (p2.length === 2) curDur = p2[0] * 60 + p2[1];
                     }
+                }
+            } else if (url.includes('netflix.com')) {
+                var titleEl = document.querySelector('[data-uia="video-title"], .video-title, [data-uia="watch-video-title"], .ellipsize-js');
+                var showName = '';
+                var episodeName = '';
+                if (titleEl) {
+                    var h4 = titleEl.querySelector('h4');
+                    var spans = Array.from(titleEl.querySelectorAll('span'))
+                        .map(function(s) { return (s.textContent || s.innerText || '').trim(); })
+                        .filter(Boolean);
+                    if (h4) {
+                        showName = (h4.textContent || h4.innerText || '').trim();
+                        if (spans.length > 0) {
+                            episodeName = spans.join(' - ');
+                        }
+                    } else if (spans.length > 0) {
+                        showName = spans[0];
+                        if (spans.length > 1) {
+                            episodeName = spans.slice(1).join(' - ');
+                        }
+                    } else {
+                        showName = (titleEl.textContent || titleEl.innerText || '').trim();
+                    }
+                }
+
+                if (!showName) {
+                    var ogTitle = document.querySelector('meta[property="og:title"]');
+                    if (ogTitle && ogTitle.content) {
+                        showName = ogTitle.content.trim();
+                    }
+                }
+
+                if (!showName && document.title) {
+                    showName = document.title.trim();
+                }
+
+                showName = showName
+                    .replace(/^Watch\\\\s+/i, '')
+                    .replace(/\\\\s*[\\\\|\\\\-–—]\\\\s*Netflix.*$/i, '')
+                    .replace(/^Netflix\\\\s*[\\\\|\\\\-–—]\\\\s*/i, '')
+                    .trim();
+
+                if (episodeName) {
+                    episodeName = episodeName
+                        .replace(/^Watch\\\\s+/i, '')
+                        .replace(/\\\\s*[\\\\|\\\\-–—]\\\\s*Netflix.*$/i, '')
+                        .replace(/^Netflix\\\\s*[\\\\|\\\\-–—]\\\\s*/i, '')
+                        .trim();
+                }
+
+                if (showName && showName.toLowerCase() !== 'netflix' && !showName.toLowerCase().includes('watch tv shows online')) {
+                    track = showName;
+                    artist = episodeName || 'Netflix';
+                } else if (episodeName) {
+                    track = episodeName;
+                    artist = 'Netflix';
+                } else if (url.includes('/watch/')) {
+                    track = showName || 'Netflix';
+                    artist = 'Netflix';
+                }
+
+                var ogImg = document.querySelector('meta[property="og:image"]');
+                if (ogImg && ogImg.content) {
+                    imgUrl = ogImg.content;
+                } else {
+                    var posterImg = document.querySelector('.previewModal--boxart, .boxart-image, [data-uia="video-canvas"] img, img.title-logo, .billboard-row img');
+                    if (posterImg && posterImg.src) {
+                        imgUrl = posterImg.src;
+                    }
+                }
+
+                if (v) {
+                    isPlaying = (!v.paused && !v.ended && v.currentTime > 0) ? 'playing' : 'paused';
                 }
             }
 
@@ -197,6 +272,8 @@ final class MediaManager: ObservableObject {
                 service = 'youtube';
             } else if (url.includes('spotify.com')) {
                 service = 'spotify';
+            } else if (url.includes('netflix.com')) {
+                service = 'netflix';
             }
 
             if (track) {
@@ -285,7 +362,7 @@ final class MediaManager: ObservableObject {
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
                                 set res to execute t javascript webScraper
                                 if res is not missing value and res is not "null" and res contains "|playing|" then
                                     return "\(tag)|" & res
@@ -310,7 +387,7 @@ final class MediaManager: ObservableObject {
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
                                 set res to do JavaScript webScraper in t
                                 if res is not missing value and res is not "null" and res contains "|playing|" then
                                     return "Safari|" & res
@@ -336,7 +413,7 @@ final class MediaManager: ObservableObject {
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
                                 set res to execute t javascript webScraper
                                 if res is not missing value and res is not "null" then
                                     return "\(tag)|" & res
@@ -361,7 +438,7 @@ final class MediaManager: ObservableObject {
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
                                 set res to do JavaScript webScraper in t
                                 if res is not missing value and res is not "null" then
                                     return "Safari|" & res
@@ -455,6 +532,7 @@ final class MediaManager: ObservableObject {
                 let newDuration = parts.count >= 7 ? (Double(parts[6]) ?? 0) : 0
                 
                 let newIsYouTube = imgUrlString.contains("youtube.com") || imgUrlString.contains("ytimg.com") || imgUrlString.contains("youtu.be") || sourceApp.contains("YouTube")
+                let newIsNetflix = sourceApp.localizedCaseInsensitiveContains("Netflix") || imgUrlString.contains("netflix.com") || imgUrlString.contains("nflxso.net") || imgUrlString.contains("nflxext.com")
                 
                 let serviceTag = parts.count >= 8 ? parts[7].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : ""
                 let newService: MediaService
@@ -464,6 +542,8 @@ final class MediaManager: ObservableObject {
                     newService = .youtube
                 } else if serviceTag == "applemusic" || sourceApp == "MusicNative" {
                     newService = .appleMusic
+                } else if serviceTag == "netflix" || newIsNetflix {
+                    newService = .netflix
                 } else {
                     newService = .other
                 }
@@ -474,7 +554,8 @@ final class MediaManager: ObservableObject {
                     self.title = newTitle
                     self.artist = newArtist
                     self.isPlaying = newIsPlaying
-                    self.isYouTube = newIsYouTube
+                    self.isYouTube = newService == .youtube
+                    self.isNetflix = newService == .netflix
                     self.mediaService = newService
                     if !self.isScrubbing && Date() >= self.seekLockUntil {
                         if sourceApp != "MusicNative" || newCurPos > 0 {
@@ -536,12 +617,40 @@ final class MediaManager: ObservableObject {
     }
     
     private func loadAppIcon(for sourceApp: String) {
+        if mediaService == .netflix || sourceApp.localizedCaseInsensitiveContains("Netflix") {
+            let runningApps = NSWorkspace.shared.runningApplications
+            if let netflixApp = runningApps.first(where: {
+                ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("netflix") ||
+                ($0.localizedName ?? "").localizedCaseInsensitiveContains("netflix")
+            }), let bundleUrl = netflixApp.bundleURL {
+                let img = NSWorkspace.shared.icon(forFile: bundleUrl.path)
+                Self.artworkCache.setObject(img, forKey: "netflixAppIcon" as NSString)
+                self.artworkImage = img
+                return
+            }
+            
+            let possibleAppPaths = [
+                "/Users/\(NSUserName())/Applications/Netflix.app",
+                "/Users/\(NSUserName())/Applications/Chrome Apps.localized/Netflix.app",
+                "/Applications/Netflix.app"
+            ]
+            for path in possibleAppPaths {
+                if FileManager.default.fileExists(atPath: path) {
+                    let img = NSWorkspace.shared.icon(forFile: path)
+                    Self.artworkCache.setObject(img, forKey: "netflixAppIcon" as NSString)
+                    self.artworkImage = img
+                    return
+                }
+            }
+        }
+
         let bundleId: String
         if sourceApp == "SpotifyNative" { bundleId = "com.spotify.client" }
         else if sourceApp == "MusicNative" { bundleId = "com.apple.Music" }
         else if sourceApp == "Brave" { bundleId = "com.brave.Browser" }
         else if sourceApp == "Chrome" { bundleId = "com.google.Chrome" }
         else if sourceApp == "Arc" { bundleId = "company.thebrowser.Browser" }
+        else if sourceApp == "Edge" { bundleId = "com.microsoft.edgemac" }
         else { bundleId = "com.apple.Safari" }
         
         if let cached = Self.artworkCache.object(forKey: bundleId as NSString) {
@@ -564,6 +673,7 @@ final class MediaManager: ObservableObject {
                 self.isPlaying = false
                 self.artworkImage = nil
                 self.isYouTube = false
+                self.isNetflix = false
                 self.mediaService = .other
                 self.currentTime = 0
                 self.duration = 0
@@ -598,11 +708,24 @@ final class MediaManager: ObservableObject {
         let hasBrave = runningApps.contains { app in
             let id = app.bundleIdentifier ?? ""
             let name = app.localizedName ?? ""
-            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name == "YouTube" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube")
+            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix")
         }
-        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
-        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
-        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
+        let hasChrome = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
+            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name.localizedCaseInsensitiveContains("Chrome") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix") || id.localizedCaseInsensitiveContains("netflix")
+        }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" || ($0.localizedName ?? "") == "Arc" }
+        let hasEdge = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
+            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name.localizedCaseInsensitiveContains("Edge") || name.localizedCaseInsensitiveContains("Netflix")
+        }
+        let hasSafari = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
+            return id == "com.apple.Safari" || id.hasPrefix("com.apple.Safari.WebApp") || name.localizedCaseInsensitiveContains("Safari") || name.localizedCaseInsensitiveContains("Netflix")
+        }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var scriptSource = ""
@@ -651,7 +774,8 @@ final class MediaManager: ObservableObject {
                 let browsers = [
                     ("Brave Browser", hasBrave),
                     ("Google Chrome", hasChrome),
-                    ("Arc", hasArc)
+                    ("Arc", hasArc),
+                    ("Microsoft Edge", hasEdge)
                 ]
                 
                 for (b, isRunning) in browsers where isRunning {
@@ -661,7 +785,7 @@ final class MediaManager: ObservableObject {
                             repeat with win in every window
                                 repeat with t in every tab of win
                                     set tabURL to URL of t
-                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
                                         tell t to execute javascript "\(escapedJsSeek)"
                                     end if
                                 end repeat
@@ -679,7 +803,7 @@ final class MediaManager: ObservableObject {
                             repeat with win in every window
                                 repeat with t in every tab of win
                                     set tabURL to URL of t
-                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
                                         do JavaScript "\(escapedJsSeek)" in t
                                     end if
                                 end repeat
@@ -720,11 +844,24 @@ final class MediaManager: ObservableObject {
         let hasBrave = runningApps.contains { app in
             let id = app.bundleIdentifier ?? ""
             let name = app.localizedName ?? ""
-            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name == "YouTube" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube")
+            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix")
         }
-        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
-        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
-        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
+        let hasChrome = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
+            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name.localizedCaseInsensitiveContains("Chrome") || name.localizedCaseInsensitiveContains("YouTube") || name.localizedCaseInsensitiveContains("Netflix") || id.localizedCaseInsensitiveContains("netflix")
+        }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" || ($0.localizedName ?? "") == "Arc" }
+        let hasEdge = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
+            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name.localizedCaseInsensitiveContains("Edge") || name.localizedCaseInsensitiveContains("Netflix")
+        }
+        let hasSafari = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
+            return id == "com.apple.Safari" || id.hasPrefix("com.apple.Safari.WebApp") || name.localizedCaseInsensitiveContains("Safari") || name.localizedCaseInsensitiveContains("Netflix")
+        }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var scriptSource = ""
@@ -746,8 +883,11 @@ final class MediaManager: ObservableObject {
                 (function() {
                     var cmd = '\(command)';
                     if (cmd === 'playpause') {
-                        var ytPlayBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, [data-testid=\"control-button-playpause\"]');
-                        if (ytPlayBtn) {
+                        var nfPlayBtn = document.querySelector('[data-uia="control-play-pause-play"], [data-uia="control-play-pause-pause"], [data-uia="control-play-pause"], .button-nfVideosPlay, .button-nfVideosPause');
+                        var ytPlayBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, [data-testid="control-button-playpause"]');
+                        if (nfPlayBtn) {
+                            nfPlayBtn.click();
+                        } else if (ytPlayBtn) {
                             ytPlayBtn.click();
                         } else {
                             var videos = Array.from(document.querySelectorAll('video'));
@@ -757,26 +897,36 @@ final class MediaManager: ObservableObject {
                             }
                         }
                     } else if (cmd === 'next track') {
-                        var nextBtn = document.querySelector('.ytp-next-button, .next-button.ytmusic-player-bar, [data-testid=\"control-button-skip-forward\"]');
-                        var videos = Array.from(document.querySelectorAll('video'));
-                        var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
-                        if (v && isFinite(v.duration)) {
-                            v.currentTime = Math.min(v.duration, v.currentTime + 10);
-                        } else if (nextBtn) {
-                            nextBtn.click();
+                        var nfForwardBtn = document.querySelector('[data-uia="control-fast-forward"], [data-uia="control-seek-forward"], [data-uia="control-skip-forward"], .button-nfVideosFastForward');
+                        var nextBtn = document.querySelector('.ytp-next-button, .next-button.ytmusic-player-bar, [data-testid="control-button-skip-forward"]');
+                        if (nfForwardBtn) {
+                            nfForwardBtn.click();
+                        } else {
+                            var videos = Array.from(document.querySelectorAll('video'));
+                            var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
+                            if (v && isFinite(v.duration)) {
+                                v.currentTime = Math.min(v.duration, v.currentTime + 10);
+                            } else if (nextBtn) {
+                                nextBtn.click();
+                            }
                         }
                     } else if (cmd === 'previous track') {
-                        var videos = Array.from(document.querySelectorAll('video'));
-                        var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
-                        if (v) {
-                            if (v.currentTime > 3) {
-                                v.currentTime = 0;
-                            } else {
-                                v.currentTime = Math.max(0, v.currentTime - 10);
-                            }
+                        var nfRewindBtn = document.querySelector('[data-uia="control-seek-back"], [data-uia="control-fast-rewind"], [data-uia="control-skip-back"], .button-nfVideosRewind');
+                        var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, [data-testid="control-button-skip-back"]');
+                        if (nfRewindBtn) {
+                            nfRewindBtn.click();
                         } else {
-                            var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, [data-testid=\"control-button-skip-back\"]');
-                            if (prevBtn) prevBtn.click();
+                            var videos = Array.from(document.querySelectorAll('video'));
+                            var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
+                            if (v) {
+                                if (v.currentTime > 3) {
+                                    v.currentTime = 0;
+                                } else {
+                                    v.currentTime = Math.max(0, v.currentTime - 10);
+                                }
+                            } else if (prevBtn) {
+                                prevBtn.click();
+                            }
                         }
                     }
                 })();
@@ -789,7 +939,8 @@ final class MediaManager: ObservableObject {
                 let browsers = [
                     ("Brave Browser", hasBrave),
                     ("Google Chrome", hasChrome),
-                    ("Arc", hasArc)
+                    ("Arc", hasArc),
+                    ("Microsoft Edge", hasEdge)
                 ]
                 
                 for (b, isRunning) in browsers where isRunning {
@@ -799,7 +950,7 @@ final class MediaManager: ObservableObject {
                             repeat with win in every window
                                 repeat with t in every tab of win
                                     set tabURL to URL of t
-                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
                                         tell t to execute javascript "\(escapedJsCmd)"
                                     end if
                                 end repeat
@@ -817,7 +968,7 @@ final class MediaManager: ObservableObject {
                             repeat with win in every window
                                 repeat with t in every tab of win
                                     set tabURL to URL of t
-                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
                                         do JavaScript "\(escapedJsCmd)" in t
                                     end if
                                 end repeat

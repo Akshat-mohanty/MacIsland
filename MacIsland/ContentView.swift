@@ -45,9 +45,9 @@ struct ContentView: View {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(Color(white: 0.15))
-                                Image(systemName: "music.note")
+                                Image(systemName: mediaManager.mediaService == .netflix ? "tv.fill" : "music.note")
                                     .font(.system(size: 20))
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(mediaManager.mediaService == .netflix ? Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) : .white.opacity(0.8))
                             }
                             .frame(width: 42, height: 42)
                         }
@@ -186,9 +186,9 @@ struct ContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 4.5))
                             .padding(.leading, 12)
                     } else if mediaManager.title != "Not Playing" || mediaManager.isPlaying {
-                        Image(systemName: "music.note")
+                        Image(systemName: mediaManager.mediaService == .netflix ? "tv.fill" : "music.note")
                             .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.85))
+                            .foregroundColor(mediaManager.mediaService == .netflix ? Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) : .white.opacity(0.85))
                             .padding(.leading, 13)
                     }
 
