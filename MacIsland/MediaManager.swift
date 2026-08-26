@@ -619,9 +619,9 @@ final class MediaManager: ObservableObject {
         if source == "MusicNative" || source == "SpotifyNative" {
             if let sendCommand = Self.mrSendCommand {
                 let options: [String: Any] = [
-                    "kMRMediaRemoteOptionPlaybackPosition": seconds
+                    "kMRMediaRemoteOptionPlaybackPosition": NSNumber(value: seconds)
                 ]
-                _ = sendCommand(26, options as CFDictionary)
+                _ = sendCommand(24, options as CFDictionary)
             }
         }
 
@@ -637,18 +637,7 @@ final class MediaManager: ObservableObject {
                 end try
                 """
             } else if source == "MusicNative" {
-                scriptSource = """
-                try
-                    tell application "Music"
-                        try
-                            set player position to (\(seconds) as real)
-                        end try
-                        try
-                            set player position to (\(Int(seconds)) as integer)
-                        end try
-                    end tell
-                end try
-                """
+                // MediaRemote Command 24 handles Apple Music seeking without triggering AppleScript -10006 restart
             } else {
                 let jsSeek = """
                 (function() {
