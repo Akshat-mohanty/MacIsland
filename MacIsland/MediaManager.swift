@@ -42,13 +42,26 @@ final class MediaManager: ObservableObject {
     private var lastArtworkURL: String = ""
     private var seekLockUntil: Date = .distantPast
     
+    private typealias MRRegisterForNotificationsFunc = @convention(c) (DispatchQueue) -> Void
+    private static let mrRegisterForNotifications: MRRegisterForNotificationsFunc? = {
+        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRMediaRemoteRegisterForNowPlayingNotifications") else { return nil }
+        return unsafeBitCast(sym, to: MRRegisterForNotificationsFunc.self)
+    }()
+
     private typealias MRGetNowPlayingInfoFunc = @convention(c) (DispatchQueue, @escaping (CFDictionary?) -> Void) -> Void
     private static let mrGetNowPlayingInfo: MRGetNowPlayingInfoFunc? = {
         guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRMediaRemoteGetNowPlayingInfo") else { return nil }
         return unsafeBitCast(sym, to: MRGetNowPlayingInfoFunc.self)
     }()
+
+    private typealias MRGetIsPlayingFunc = @convention(c) (DispatchQueue, @escaping (Bool) -> Void) -> Void
+    private static let mrGetIsPlaying: MRGetIsPlayingFunc? = {
+        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRMediaRemoteGetNowPlayingApplicationIsPlaying") else { return nil }
+        return unsafeBitCast(sym, to: MRGetIsPlayingFunc.self)
+    }()
     
     init() {
+        Self.mrRegisterForNotifications?(DispatchQueue.global(qos: .userInitiated))
         startPolling()
     }
     
@@ -389,16 +402,42 @@ final class MediaManager: ObservableObject {
         if let getInfo = Self.mrGetNowPlayingInfo {
             let sema = DispatchSemaphore(value: 0)
             var mediaRemoteActive = false
-            getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
-                if let d = dict as? [String: Any], let self = self {
-                    let rate = d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0
-                    if rate > 0 {
-                        mediaRemoteActive = self.parseMediaRemoteInfo(d)
+            
+            if let getIsPlaying = Self.mrGetIsPlaying {
+                getIsPlaying(DispatchQueue.global(qos: .userInitiated)) { isPlaying in
+                    if isPlaying {
+                        getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                            if let d = dict as? [String: Any], let self = self {
+                                mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
+                            }
+                            sema.signal()
+                        }
+                    } else {
+                        // Check if rate > 0 in dict
+                        getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                            if let d = dict as? [String: Any], let self = self {
+                                let rate = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
+                                if rate > 0 {
+                                    mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
+                                }
+                            }
+                            sema.signal()
+                        }
                     }
                 }
-                sema.signal()
+            } else {
+                getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                    if let d = dict as? [String: Any], let self = self {
+                        let rate = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
+                        if rate > 0 {
+                            mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
+                        }
+                    }
+                    sema.signal()
+                }
             }
-            _ = sema.wait(timeout: .now() + 0.12)
+            
+            _ = sema.wait(timeout: .now() + 0.15)
             if mediaRemoteActive {
                 return
             }
@@ -516,11 +555,11 @@ final class MediaManager: ObservableObject {
             var mediaRemoteHandled = false
             getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
                 if let d = dict as? [String: Any], let self = self {
-                    mediaRemoteHandled = self.parseMediaRemoteInfo(d)
+                    mediaRemoteHandled = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: false)
                 }
                 sema.signal()
             }
-            _ = sema.wait(timeout: .now() + 0.12)
+            _ = sema.wait(timeout: .now() + 0.15)
             if mediaRemoteHandled {
                 return
             }
@@ -532,13 +571,14 @@ final class MediaManager: ObservableObject {
     private static let artworkCache = NSCache<NSString, NSImage>()
     private var consecutiveNotPlayingCount = 0
     
-    private func parseMediaRemoteInfo(_ d: [String: Any]) -> Bool {
+    private func parseMediaRemoteInfo(_ d: [String: Any], isExplicitlyPlaying: Bool? = nil) -> Bool {
         let rawTitle = (d["kMRMediaRemoteNowPlayingInfoTitle"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawTitle.isEmpty else { return false }
         
-        let rate = d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0
-        let duration = d["kMRMediaRemoteNowPlayingInfoDuration"] as? Double ?? 0
-        let elapsed = d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0
+        let rateVal = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
+        let isPlayingBool = isExplicitlyPlaying ?? (rateVal > 0)
+        let duration = (d["kMRMediaRemoteNowPlayingInfoDuration"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoDuration"] as? Double ?? 0)
+        let elapsed = (d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0)
         let timestamp = d["kMRMediaRemoteNowPlayingInfoTimestamp"] as? Date ?? Date()
         let rawArtist = (d["kMRMediaRemoteNowPlayingInfoArtist"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let rawAlbum = (d["kMRMediaRemoteNowPlayingInfoAlbum"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -547,13 +587,17 @@ final class MediaManager: ObservableObject {
         var artist = rawArtist
         var service: MediaService = .other
         
+        let runningApps = NSWorkspace.shared.runningApplications
+        let hasNetflixRunning = runningApps.contains(where: {
+            ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("netflix") ||
+            ($0.localizedName ?? "").localizedCaseInsensitiveContains("netflix") ||
+            ($0.bundleIdentifier ?? "").contains("Safari.WebApp")
+        })
+        
         let isNetflix = title.localizedCaseInsensitiveContains("Netflix") ||
                         artist.localizedCaseInsensitiveContains("Netflix") ||
                         rawAlbum.localizedCaseInsensitiveContains("Netflix") ||
-                        NSWorkspace.shared.runningApplications.contains(where: {
-                            ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("netflix") ||
-                            ($0.localizedName ?? "").localizedCaseInsensitiveContains("netflix")
-                        })
+                        hasNetflixRunning
         
         if isNetflix {
             service = .netflix
@@ -563,11 +607,7 @@ final class MediaManager: ObservableObject {
                 .replacingOccurrences(of: "Watch ", with: "", options: .caseInsensitive)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             
-            if title.lowercased() == "home" || title.lowercased() == "browse" || title.isEmpty {
-                // If just browsing and not playing, don't show as playing
-                if rate == 0 {
-                    return false
-                }
+            if title.isEmpty || title.lowercased() == "home" || title.lowercased() == "browse" {
                 title = "Netflix"
             }
             if artist.isEmpty {
@@ -579,7 +619,7 @@ final class MediaManager: ObservableObject {
             service = .spotify
         } else if title.localizedCaseInsensitiveContains("Apple Music") || artist.localizedCaseInsensitiveContains("Apple Music") {
             service = .appleMusic
-        } else if rate == 0 && duration == 0 {
+        } else if !isPlayingBool && duration == 0 {
             return false
         }
         
@@ -589,7 +629,7 @@ final class MediaManager: ObservableObject {
         }
         
         let timeSince = Date().timeIntervalSince(timestamp)
-        let calculatedPos = max(0, rate > 0 ? (elapsed + timeSince * rate) : elapsed)
+        let calculatedPos = max(0, isPlayingBool ? (elapsed + timeSince * (rateVal > 0 ? rateVal : 1.0)) : elapsed)
         let currentPos = duration > 0 ? min(calculatedPos, duration) : calculatedPos
         
         Task { @MainActor in
@@ -597,7 +637,7 @@ final class MediaManager: ObservableObject {
             self.currentSource = service == .netflix ? "NetflixApp" : "MediaRemote"
             self.title = title
             self.artist = artist
-            self.isPlaying = rate > 0
+            self.isPlaying = isPlayingBool
             self.isYouTube = service == .youtube
             self.isNetflix = service == .netflix
             self.mediaService = service
