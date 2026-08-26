@@ -108,6 +108,20 @@ final class MediaManager: ObservableObject {
                     isPlaying = (pb && pb.getAttribute('aria-label') === 'Pause') ? 'playing' : 'paused';
                     imgUrl = img ? img.src : '';
                 }
+                var inp = document.querySelector('[data-testid="playback-progressbar"] input');
+                if (inp) {
+                    curPos = Math.round(Number(inp.value) / 1000);
+                    curDur = Math.round(Number(inp.max) / 1000);
+                } else {
+                    var curTimeEl = document.querySelector('[data-testid="playback-position"]');
+                    var durTimeEl = document.querySelector('[data-testid="playback-duration"]');
+                    if (curTimeEl && durTimeEl) {
+                        var p1 = curTimeEl.innerText.trim().split(':').map(Number);
+                        var p2 = durTimeEl.innerText.trim().split(':').map(Number);
+                        if (p1.length === 2) curPos = p1[0] * 60 + p1[1];
+                        if (p2.length === 2) curDur = p2[0] * 60 + p2[1];
+                    }
+                }
             }
 
             if (media) {
@@ -460,17 +474,13 @@ final class MediaManager: ObservableObject {
                 let jsSeek = """
                 (function() {
                     var targetSec = \(seconds);
-                    var spotBar = document.querySelector('[data-testid="playback-progressbar"], [data-testid="progress-bar"]');
-                    if (spotBar) {
-                        var rect = spotBar.getBoundingClientRect();
-                        var dur = \(max(1, Int(self?.duration ?? 1)));
-                        var fraction = Math.min(Math.max(targetSec / dur, 0), 1);
-                        var clientX = rect.left + rect.width * fraction;
-                        var clientY = rect.top + rect.height / 2;
-                        var opts = { bubbles: true, cancelable: true, view: window, clientX: clientX, clientY: clientY };
-                        spotBar.dispatchEvent(new MouseEvent('mousedown', opts));
-                        spotBar.dispatchEvent(new MouseEvent('mouseup', opts));
-                        spotBar.dispatchEvent(new MouseEvent('click', opts));
+                    var inp = document.querySelector('[data-testid="playback-progressbar"] input');
+                    if (inp) {
+                        var targetMs = targetSec * 1000;
+                        var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        nativeSetter.call(inp, targetMs);
+                        inp.dispatchEvent(new Event('input', { bubbles: true }));
+                        inp.dispatchEvent(new Event('change', { bubbles: true }));
                     }
                     var v = Array.from(document.querySelectorAll('video, audio')).find(function(x){return !x.paused;}) || document.querySelector('.html5-main-video') || document.querySelector('video, audio');
                     if (v) {
