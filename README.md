@@ -19,8 +19,6 @@
 
 ##  Quick Start (Running from Source)
 
-### Terminal Command-
-
 Open Terminal and run:
 
 ```bash
