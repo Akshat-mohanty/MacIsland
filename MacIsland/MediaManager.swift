@@ -425,26 +425,41 @@ final class MediaManager: ObservableObject {
     func seek(to seconds: Double) {
         self.currentTime = seconds
         let source = self.currentSource
+        let runningApps = NSWorkspace.shared.runningApplications
+        let hasBrave = runningApps.contains { app in
+            let id = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name == "YouTube" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube")
+        }
+        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
+        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var scriptSource = ""
 
             if source == "SpotifyNative" {
                 scriptSource = """
                 try
-                    tell application id "com.spotify.client" to set player position to \(seconds)
+                    tell application "Spotify" to set player position to \(seconds)
                 end try
                 """
             } else if source == "MusicNative" {
                 scriptSource = """
                 try
-                    tell application id "com.apple.Music" to set player position to \(seconds)
+                    tell application "Music" to set player position to \(seconds)
                 end try
                 """
             } else {
-                let jsSeek = "(function() { var m = document.querySelector('video, audio'); if (m) { m.currentTime = \(seconds); } })();"
+                let jsSeek = "(function() { var v = Array.from(document.querySelectorAll('video')).find(function(x){return !x.paused;}) || document.querySelector('.html5-main-video') || document.querySelector('video, audio'); if (v) { v.currentTime = \(seconds); } })();"
                 
-                let browsers = ["Brave Browser", "Google Chrome", "Arc"]
-                for b in browsers {
+                let browsers = [
+                    ("Brave Browser", hasBrave),
+                    ("Google Chrome", hasChrome),
+                    ("Arc", hasArc)
+                ]
+                
+                for (b, isRunning) in browsers where isRunning {
                     scriptSource += """
                     try
                         tell application "\(b)"
@@ -458,23 +473,27 @@ final class MediaManager: ObservableObject {
                             end repeat
                         end tell
                     end try
+                    
                     """
                 }
                 
-                scriptSource += """
-                try
-                    tell application id "com.apple.Safari"
-                        repeat with win in every window
-                            repeat with t in every tab of win
-                                set tabURL to URL of t
-                                if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                    do JavaScript "\(jsSeek)" in t
-                                end if
+                if hasSafari {
+                    scriptSource += """
+                    try
+                        tell application "Safari"
+                            repeat with win in every window
+                                repeat with t in every tab of win
+                                    set tabURL to URL of t
+                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                        do JavaScript "\(jsSeek)" in t
+                                    end if
+                                end repeat
                             end repeat
                         end tell
                     end try
-                end try
-                """
+                    
+                    """
+                }
             }
 
             if let script = NSAppleScript(source: scriptSource) {
@@ -502,64 +521,83 @@ final class MediaManager: ObservableObject {
     
     private func runControlCommand(_ command: String) {
         let source = self.currentSource
+        let runningApps = NSWorkspace.shared.runningApplications
+        let hasBrave = runningApps.contains { app in
+            let id = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name == "YouTube" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube")
+        }
+        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
+        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var scriptSource = ""
 
             if source == "SpotifyNative" {
                 scriptSource = """
                 try
-                    tell application id "com.spotify.client" to \(command)
+                    tell application "Spotify" to \(command)
                 end try
                 """
             } else if source == "MusicNative" {
                 scriptSource = """
                 try
-                    tell application id "com.apple.Music" to \(command)
+                    tell application "Music" to \(command)
                 end try
                 """
             } else {
                 let jsCmd = """
                 (function() {
                     var cmd = '\(command)';
-                    var v = document.querySelector('video');
-                    var a = document.querySelector('audio');
-                    var media = v || a;
-                    
                     if (cmd === 'playpause') {
-                        if (media) {
-                            if (media.paused) {
-                                media.play();
-                            } else {
-                                media.pause();
-                            }
+                        var ytPlayBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, [data-testid=\"control-button-playpause\"]');
+                        if (ytPlayBtn) {
+                            ytPlayBtn.click();
                         } else {
-                            var playBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, [data-testid=\"control-button-playpause\"]');
-                            if (playBtn) playBtn.click();
+                            var videos = Array.from(document.querySelectorAll('video'));
+                            var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
+                            if (v) {
+                                if (v.paused) v.play(); else v.pause();
+                            }
                         }
                     } else if (cmd === 'next track') {
                         var nextBtn = document.querySelector('.ytp-next-button, .next-button.ytmusic-player-bar, [data-testid=\"control-button-skip-forward\"]');
-                        if (nextBtn) {
+                        var videos = Array.from(document.querySelectorAll('video'));
+                        var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
+                        if (v && isFinite(v.duration)) {
+                            v.currentTime = Math.min(v.duration, v.currentTime + 10);
+                        } else if (nextBtn) {
                             nextBtn.click();
-                        } else if (media && isFinite(media.duration)) {
-                            media.currentTime = Math.min(media.duration, media.currentTime + 10);
                         }
                     } else if (cmd === 'previous track') {
-                        var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, [data-testid=\"control-button-skip-back\"]');
-                        if (prevBtn) {
-                            prevBtn.click();
-                        } else if (media) {
-                            if (media.currentTime > 3) {
-                                media.currentTime = 0;
+                        var videos = Array.from(document.querySelectorAll('video'));
+                        var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
+                        if (v) {
+                            if (v.currentTime > 3) {
+                                v.currentTime = 0;
                             } else {
-                                media.currentTime = Math.max(0, media.currentTime - 10);
+                                v.currentTime = Math.max(0, v.currentTime - 10);
                             }
+                        } else {
+                            var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, [data-testid=\"control-button-skip-back\"]');
+                            if (prevBtn) prevBtn.click();
                         }
                     }
                 })();
                 """
                 
-                let browsers = ["Brave Browser", "Google Chrome", "Arc"]
-                for b in browsers {
+                let escapedJsCmd = jsCmd
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "\"", with: "\\\"")
+                
+                let browsers = [
+                    ("Brave Browser", hasBrave),
+                    ("Google Chrome", hasChrome),
+                    ("Arc", hasArc)
+                ]
+                
+                for (b, isRunning) in browsers where isRunning {
                     scriptSource += """
                     try
                         tell application "\(b)"
@@ -567,29 +605,33 @@ final class MediaManager: ObservableObject {
                                 repeat with t in every tab of win
                                     set tabURL to URL of t
                                     if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                        execute t javascript "\(jsCmd)"
+                                        execute t javascript "\(escapedJsCmd)"
                                     end if
                                 end repeat
                             end repeat
                         end tell
                     end try
+                    
                     """
                 }
                 
-                scriptSource += """
-                try
-                    tell application id "com.apple.Safari"
-                        repeat with win in every window
-                            repeat with t in every tab of win
-                                set tabURL to URL of t
-                                if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                    do JavaScript "\(jsCmd)" in t
-                                end if
+                if hasSafari {
+                    scriptSource += """
+                    try
+                        tell application "Safari"
+                            repeat with win in every window
+                                repeat with t in every tab of win
+                                    set tabURL to URL of t
+                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                        do JavaScript "\(escapedJsCmd)" in t
+                                    end if
+                                end repeat
                             end repeat
                         end tell
                     end try
-                end try
-                """
+                    
+                    """
+                }
             }
 
             if let script = NSAppleScript(source: scriptSource) {
