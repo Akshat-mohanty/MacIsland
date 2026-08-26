@@ -124,7 +124,7 @@ final class MediaManager: ObservableObject {
                 }
             }
 
-            if (media) {
+            if (media && !url.includes('spotify.com')) {
                 curPos = media.currentTime || 0;
                 curDur = (isFinite(media.duration) && media.duration) ? media.duration : 0;
             }
