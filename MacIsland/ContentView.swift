@@ -185,7 +185,7 @@ struct ContentView: View {
                             .frame(width: 18, height: 18)
                             .clipShape(RoundedRectangle(cornerRadius: 4.5))
                             .padding(.leading, 12)
-                    } else if mediaManager.isPlaying {
+                    } else if mediaManager.title != "Not Playing" || mediaManager.isPlaying {
                         Image(systemName: "music.note")
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundColor(.white.opacity(0.85))
@@ -194,10 +194,15 @@ struct ContentView: View {
 
                     Spacer()
 
-                    // Trailing Animated Audio Spectrum
+                    // Trailing Animated Audio Spectrum or Paused Indicator
                     if mediaManager.isPlaying {
                         AudioSpectrumView()
                             .padding(.trailing, 13)
+                    } else if mediaManager.title != "Not Playing" {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.6))
+                            .padding(.trailing, 14)
                     }
                 }
                 .frame(width: collapsedWidth, height: collapsedHeight)

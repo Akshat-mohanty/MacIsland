@@ -45,11 +45,15 @@ class MediaManager {
 
         let rawScraper = """
         (function() {
-            var v = document.querySelector('video');
+            var videos = Array.from(document.querySelectorAll('video'));
+            var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
             var a = document.querySelector('audio');
             var media = v || a;
             var url = window.location.href;
             var track = '', artist = '', isPlaying = 'paused', imgUrl = '', curPos = 0, curDur = 0;
+
+            var ytPlayer = document.querySelector('.html5-video-player');
+            var ytPlaying = ytPlayer ? ytPlayer.classList.contains('playing-mode') : (v && !v.paused);
 
             if (url.includes('music.youtube.com')) {
                 var titleEl = document.querySelector('.title.ytmusic-player-bar');
@@ -58,11 +62,13 @@ class MediaManager {
                 artist = artEl ? artEl.textContent.trim() : 'YouTube Music';
                 var imgEl = document.querySelector('.ytmusic-player-bar .image, .ytmusic-player-bar img');
                 if (imgEl && imgEl.src) imgUrl = imgEl.src;
+                isPlaying = ytPlaying ? 'playing' : 'paused';
             } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
                 var titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string, ytd-watch-flexy h1, .ytp-title-link, .title.ytd-video-primary-info-renderer');
-                track = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube$/, '');
+                track = titleEl ? (titleEl.textContent || titleEl.innerText).trim() : document.title.replace(/ - YouTube$/, '');
                 var artEl = document.querySelector('#owner ytd-channel-name yt-formatted-string, #upload-info ytd-channel-name yt-formatted-string, ytd-channel-name a, #channel-name a');
-                artist = artEl ? artEl.textContent.trim() : 'YouTube';
+                artist = artEl ? (artEl.textContent || artEl.innerText).trim() : 'YouTube';
+                isPlaying = ytPlaying ? 'playing' : 'paused';
             } else if (url.includes('spotify.com')) {
                 var t = document.querySelector('[data-testid="context-item-link"]');
                 var art = document.querySelector('[data-testid="context-item-info-subtitles"]');
@@ -77,9 +83,6 @@ class MediaManager {
             }
 
             if (media) {
-                if (!url.includes('spotify.com')) {
-                    isPlaying = (!media.paused && !media.ended && media.readyState > 1) ? 'playing' : 'paused';
-                }
                 curPos = media.currentTime || 0;
                 curDur = (isFinite(media.duration) && media.duration) ? media.duration : 0;
             }
