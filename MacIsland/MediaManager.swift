@@ -33,10 +33,93 @@ class MediaManager {
     }
     
     func fetchNowPlayingInfo() {
-        let scriptSource = """
-        try
-            if application id "com.spotify.client" is running then
-                tell application id "com.spotify.client"
+        let runningApps = NSWorkspace.shared.runningApplications
+        
+        let hasSpotify = runningApps.contains { $0.bundleIdentifier == "com.spotify.client" || $0.localizedName == "Spotify" }
+        let hasMusic = runningApps.contains { $0.bundleIdentifier == "com.apple.Music" || $0.localizedName == "Music" }
+        let hasBrave = runningApps.contains { $0.bundleIdentifier == "com.brave.Browser" || $0.localizedName == "Brave Browser" }
+        let hasChrome = runningApps.contains { $0.bundleIdentifier == "com.google.Chrome" || $0.localizedName == "Google Chrome" }
+        let hasArc = runningApps.contains { $0.bundleIdentifier == "company.thebrowser.Browser" || $0.localizedName == "Arc" }
+        let hasSafari = runningApps.contains { $0.bundleIdentifier == "com.apple.Safari" || $0.localizedName == "Safari" }
+        let hasEdge = runningApps.contains { $0.bundleIdentifier == "com.microsoft.edgemac" || $0.localizedName == "Microsoft Edge" }
+
+        let rawScraper = """
+        (function() {
+            var v = document.querySelector('video');
+            var a = document.querySelector('audio');
+            var media = v || a;
+            var url = window.location.href;
+            var track = '', artist = '', isPlaying = 'paused', imgUrl = '', curPos = 0, curDur = 0;
+
+            if (url.includes('music.youtube.com')) {
+                var titleEl = document.querySelector('.title.ytmusic-player-bar');
+                track = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube Music$/, '');
+                var artEl = document.querySelector('.ytmusic-player-bar .byline a, .ytmusic-player-bar .byline, .ytmusic-player-bar .subtitle');
+                artist = artEl ? artEl.textContent.trim() : 'YouTube Music';
+                var imgEl = document.querySelector('.ytmusic-player-bar .image, .ytmusic-player-bar img');
+                if (imgEl && imgEl.src) imgUrl = imgEl.src;
+            } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
+                var titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string, ytd-watch-flexy h1, .ytp-title-link, .title.ytd-video-primary-info-renderer');
+                track = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube$/, '');
+                var artEl = document.querySelector('#owner ytd-channel-name yt-formatted-string, #upload-info ytd-channel-name yt-formatted-string, ytd-channel-name a, #channel-name a');
+                artist = artEl ? artEl.textContent.trim() : 'YouTube';
+            } else if (url.includes('spotify.com')) {
+                var t = document.querySelector('[data-testid="context-item-link"]');
+                var art = document.querySelector('[data-testid="context-item-info-subtitles"]');
+                var pb = document.querySelector('[data-testid="control-button-playpause"]');
+                var img = document.querySelector('img[data-testid="cover-art-image"]') || document.querySelector('img[data-testid="context-item-image"]');
+                if (t && art) {
+                    track = t.innerText;
+                    artist = art.innerText.replace(/[\\r\\n]+/g, ', ');
+                    isPlaying = (pb && pb.getAttribute('aria-label') === 'Pause') ? 'playing' : 'paused';
+                    imgUrl = img ? img.src : '';
+                }
+            }
+
+            if (media) {
+                if (!url.includes('spotify.com')) {
+                    isPlaying = (!media.paused && !media.ended && media.readyState > 1) ? 'playing' : 'paused';
+                }
+                curPos = media.currentTime || 0;
+                curDur = (isFinite(media.duration) && media.duration) ? media.duration : 0;
+            }
+
+            if (!imgUrl && (url.includes('youtube.com') || url.includes('youtu.be'))) {
+                var videoId = '';
+                try {
+                    var p = new URLSearchParams(window.location.search);
+                    if (p.has('v')) videoId = p.get('v');
+                } catch(e) {}
+                if (!videoId && url.includes('/shorts/')) {
+                    var parts = url.split('/shorts/');
+                    if (parts.length > 1) videoId = parts[1].split('?')[0].split('/')[0];
+                }
+                if (videoId) {
+                    imgUrl = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg';
+                } else {
+                    var metaImg = document.querySelector('link[rel="image_src"], meta[property="og:image"]');
+                    imgUrl = metaImg ? (metaImg.href || metaImg.content) : '';
+                }
+            }
+
+            if (track) {
+                return track.trim() + '|' + artist.trim() + '|' + isPlaying + '|' + (imgUrl || 'none') + '|' + Math.round(curPos) + '|' + Math.round(curDur);
+            }
+            return 'null';
+        })();
+        """
+
+        let escapedScraper = rawScraper
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
+        var scriptSource = "set webScraper to \"" + escapedScraper + "\"\n"
+
+        // 1. Actively playing native apps
+        if hasSpotify {
+            scriptSource += """
+            try
+                tell application "Spotify"
                     if player state is playing then
                         set trackName to (name of current track)
                         set trackArtist to (artist of current track)
@@ -45,12 +128,14 @@ class MediaManager {
                         return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur
                     end if
                 end tell
-            end if
-        end try
+            end try
+            """
+        }
 
-        try
-            if application id "com.apple.Music" is running then
-                tell application id "com.apple.Music"
+        if hasMusic {
+            scriptSource += """
+            try
+                tell application "Music"
                     if player state is playing then
                         set trackName to (name of current track)
                         set trackArtist to (artist of current track)
@@ -59,133 +144,42 @@ class MediaManager {
                         return "MusicNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur
                     end if
                 end tell
-            end if
-        end try
+            end try
+            """
+        }
 
-        set webScraper to "
-            (function() {
-                var v = document.querySelector('video');
-                var a = document.querySelector('audio');
-                var media = v || a;
-                var url = window.location.href;
-                var track = '', artist = '', isPlaying = 'paused', imgUrl = '', curPos = 0, curDur = 0;
+        // 2. Actively playing browser tabs
+        let chromiumBrowsers = [
+            ("Brave Browser", hasBrave, "Brave"),
+            ("Google Chrome", hasChrome, "Chrome"),
+            ("Arc", hasArc, "Arc"),
+            ("Microsoft Edge", hasEdge, "Edge")
+        ]
 
-                if (url.includes('music.youtube.com')) {
-                    var titleEl = document.querySelector('.title.ytmusic-player-bar');
-                    track = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube Music$/, '');
-                    var artEl = document.querySelector('.ytmusic-player-bar .byline a, .ytmusic-player-bar .byline, .ytmusic-player-bar .subtitle');
-                    artist = artEl ? artEl.textContent.trim() : 'YouTube Music';
-                    var imgEl = document.querySelector('.ytmusic-player-bar .image, .ytmusic-player-bar img');
-                    if (imgEl && imgEl.src) imgUrl = imgEl.src;
-                } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
-                    var titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string, ytd-watch-flexy h1, .ytp-title-link, .title.ytd-video-primary-info-renderer');
-                    track = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube$/, '');
-                    var artEl = document.querySelector('#owner ytd-channel-name yt-formatted-string, #upload-info ytd-channel-name yt-formatted-string, ytd-channel-name a, #channel-name a');
-                    artist = artEl ? artEl.textContent.trim() : 'YouTube';
-                } else if (url.includes('spotify.com')) {
-                    var t = document.querySelector('[data-testid=\\"context-item-link\\"]');
-                    var art = document.querySelector('[data-testid=\\"context-item-info-subtitles\\"]');
-                    var pb = document.querySelector('[data-testid=\\"control-button-playpause\\"]');
-                    var img = document.querySelector('img[data-testid=\\"cover-art-image\\"]') || document.querySelector('img[data-testid=\\"context-item-image\\"]');
-                    if (t && art) {
-                        track = t.innerText;
-                        artist = art.innerText.replace(/[\\\\r\\\\n]+/g, ', ');
-                        isPlaying = (pb && pb.getAttribute('aria-label') === 'Pause') ? 'playing' : 'paused';
-                        imgUrl = img ? img.src : '';
-                    }
-                }
-
-                if (media) {
-                    if (!url.includes('spotify.com')) {
-                        isPlaying = (!media.paused && !media.ended && media.readyState > 1) ? 'playing' : 'paused';
-                    }
-                    curPos = media.currentTime || 0;
-                    curDur = (isFinite(media.duration) && media.duration) ? media.duration : 0;
-                }
-
-                if (!imgUrl && (url.includes('youtube.com') || url.includes('youtu.be'))) {
-                    var videoId = '';
-                    try {
-                        var p = new URLSearchParams(window.location.search);
-                        if (p.has('v')) videoId = p.get('v');
-                    } catch(e) {}
-                    if (!videoId && url.includes('/shorts/')) {
-                        var parts = url.split('/shorts/');
-                        if (parts.length > 1) videoId = parts[1].split('?')[0].split('/')[0];
-                    }
-                    if (videoId) {
-                        imgUrl = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg';
-                    } else {
-                        var metaImg = document.querySelector('link[rel=\\"image_src\\"], meta[property=\\"og:image\\"]');
-                        imgUrl = metaImg ? (metaImg.href || metaImg.content) : '';
-                    }
-                }
-
-                if (track) {
-                    return track.trim() + '|' + artist.trim() + '|' + isPlaying + '|' + (imgUrl || 'none') + '|' + Math.round(curPos) + '|' + Math.round(curDur);
-                }
-                return 'null';
-            })();
-        "
-
-        -- 1. Check actively playing browser tabs first
-        try
-            if application "Brave Browser" is running then
-                tell application "Brave Browser"
+        for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
+            scriptSource += """
+            try
+                tell application "\(appName)"
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
                                 set res to execute t javascript webScraper
                                 if res is not missing value and res is not "null" and res contains "|playing|" then
-                                    return "Brave|" & res
+                                    return "\(tag)|" & res
                                 end if
                             end if
                         end repeat
                     end repeat
                 end tell
-            end if
-        end try
+            end try
+            """
+        }
 
-        try
-            if application "Google Chrome" is running then
-                tell application "Google Chrome"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                set res to execute t javascript webScraper
-                                if res is not missing value and res is not "null" and res contains "|playing|" then
-                                    return "Chrome|" & res
-                                end if
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end if
-        end try
-
-        try
-            if application "Arc" is running then
-                tell application "Arc"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                set res to execute t javascript webScraper
-                                if res is not missing value and res is not "null" and res contains "|playing|" then
-                                    return "Arc|" & res
-                                end if
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end if
-        end try
-
-        try
-            if application "Safari" is running then
-                tell application id "com.apple.Safari"
+        if hasSafari {
+            scriptSource += """
+            try
+                tell application "Safari"
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
@@ -198,74 +192,64 @@ class MediaManager {
                         end repeat
                     end repeat
                 end tell
-            end if
-        end try
+            end try
+            """
+        }
 
-        -- 2. Check paused native apps
-        try
-            if application id "com.spotify.client" is running then
-                tell application id "com.spotify.client"
+        // 3. Paused native apps
+        if hasSpotify {
+            scriptSource += """
+            try
+                tell application "Spotify"
                     set trackName to (name of current track)
                     set trackArtist to (artist of current track)
                     set curPos to (player position)
                     set curDur to (duration of current track) / 1000
                     return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur
                 end tell
-            end if
-        end try
+            end try
+            """
+        }
 
-        try
-            if application id "com.apple.Music" is running then
-                tell application id "com.apple.Music"
+        if hasMusic {
+            scriptSource += """
+            try
+                tell application "Music"
                     set trackName to (name of current track)
                     set trackArtist to (artist of current track)
                     set curPos to (player position)
                     set curDur to (duration of current track)
                     return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur
                 end tell
-            end if
-        end try
+            end try
+            """
+        }
 
-        -- 3. Check paused browser tabs
-        try
-            if application "Brave Browser" is running then
-                tell application "Brave Browser"
+        // 4. Paused browser tabs
+        for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
+            scriptSource += """
+            try
+                tell application "\(appName)"
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
                                 set res to execute t javascript webScraper
                                 if res is not missing value and res is not "null" then
-                                    return "Brave|" & res
+                                    return "\(tag)|" & res
                                 end if
                             end if
                         end repeat
                     end repeat
                 end tell
-            end if
-        end try
+            end try
+            """
+        }
 
-        try
-            if application "Google Chrome" is running then
-                tell application "Google Chrome"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                set res to execute t javascript webScraper
-                                if res is not missing value and res is not "null" then
-                                    return "Chrome|" & res
-                                end if
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end if
-        end try
-
-        try
-            if application "Safari" is running then
-                tell application id "com.apple.Safari"
+        if hasSafari {
+            scriptSource += """
+            try
+                tell application "Safari"
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
@@ -278,11 +262,11 @@ class MediaManager {
                         end repeat
                     end repeat
                 end tell
-            end if
-        end try
+            end try
+            """
+        }
 
-        return ""
-        """
+        scriptSource += "\nreturn \"\"\n"
         
         executeScriptAndParse(scriptSource)
     }
