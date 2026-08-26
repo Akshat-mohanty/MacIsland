@@ -93,6 +93,11 @@ struct ContentView: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+
+                            if mediaManager.isPlaying {
+                                AudioSpectrumView(color: mediaManager.accentColor)
+                                    .padding(.leading, 4)
+                            }
                         }
                     }
                     .padding(.horizontal, 16)

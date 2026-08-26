@@ -123,7 +123,10 @@ final class MediaManager: ObservableObject {
             var track = '', artist = '', isPlaying = 'paused', imgUrl = '', curPos = 0, curDur = 0;
 
             var ytPlayer = document.querySelector('.html5-video-player');
-            var ytPlaying = ytPlayer ? ytPlayer.classList.contains('playing-mode') : (v && !v.paused);
+            var ytPlaying = (ytPlayer && ytPlayer.classList.contains('playing-mode')) || (v && !v.paused && !v.ended && v.currentTime > 0);
+            if (v && v.paused && (!ytPlayer || !ytPlayer.classList.contains('playing-mode'))) {
+                ytPlaying = false;
+            }
 
             if (url.includes('music.youtube.com')) {
                 var titleEl = document.querySelector('.title.ytmusic-player-bar');
@@ -483,17 +486,20 @@ final class MediaManager: ObservableObject {
                     if imgUrlString != "none" && !imgUrlString.isEmpty {
                         if let cached = Self.artworkCache.object(forKey: imgUrlString as NSString) {
                             self.artworkImage = cached
-                        } else if self.lastArtworkURL != imgUrlString, let url = URL(string: imgUrlString) {
-                            self.lastArtworkURL = imgUrlString
-                            Task.detached(priority: .userInitiated) {
-                                if let data = try? Data(contentsOf: url), let img = NSImage(data: data) {
-                                    await MainActor.run {
-                                        Self.artworkCache.setObject(img, forKey: imgUrlString as NSString)
-                                        if self.lastArtworkURL == imgUrlString {
+                        } else {
+                            if let url = URL(string: imgUrlString) {
+                                self.lastArtworkURL = imgUrlString
+                                var request = URLRequest(url: url)
+                                request.timeoutInterval = 8.0
+                                URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+                                    guard let self = self, let data = data, let img = NSImage(data: data) else { return }
+                                    Self.artworkCache.setObject(img, forKey: imgUrlString as NSString)
+                                    Task { @MainActor in
+                                        if self.lastArtworkURL == imgUrlString || self.artworkImage == nil {
                                             self.artworkImage = img
                                         }
                                     }
-                                }
+                                }.resume()
                             }
                         }
                     } else {
