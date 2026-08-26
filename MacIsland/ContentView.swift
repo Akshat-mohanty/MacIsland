@@ -223,13 +223,9 @@ struct ContentView: View {
                     }
                 } else {
                     guard !isDraggingSlider else { return }
-                    let item = DispatchWorkItem {
-                        withAnimation(springAnimation) {
-                            isExpanded = false
-                        }
+                    withAnimation(springAnimation) {
+                        isExpanded = false
                     }
-                    collapseWorkItem = item
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
                 }
             }
             // Dynamic island depth shadow
