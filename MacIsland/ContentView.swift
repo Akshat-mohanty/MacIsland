@@ -10,7 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @State private var isExpanded = false
     @State private var window: NSWindow?
-    @State private var mediaManager = MediaManager()
+    @StateObject private var mediaManager = MediaManager()
     @State private var isHoveringSlider = false
     @State private var isDraggingSlider = false
     @State private var dragSliderTime: Double = 0

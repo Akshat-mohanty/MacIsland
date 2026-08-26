@@ -1,18 +1,17 @@
 import Foundation
 import AppKit
-import Observation
+import Combine
 
-@Observable
-class MediaManager {
-    var title: String = "Not Playing"
-    var artist: String = ""
-    var artworkImage: NSImage? = nil
-    var isPlaying: Bool = false
-    var isYouTube: Bool = false
-    var currentTime: Double = 0
-    var duration: Double = 0
-    var isScrubbing: Bool = false
-    var currentSource: String = ""
+final class MediaManager: ObservableObject {
+    @Published var title: String = "Not Playing"
+    @Published var artist: String = ""
+    @Published var artworkImage: NSImage? = nil
+    @Published var isPlaying: Bool = false
+    @Published var isYouTube: Bool = false
+    @Published var currentTime: Double = 0
+    @Published var duration: Double = 0
+    @Published var isScrubbing: Bool = false
+    @Published var currentSource: String = ""
     
     private var timer: Timer?
     private var lastArtworkURL: String = ""
@@ -35,13 +34,41 @@ class MediaManager {
     func fetchNowPlayingInfo() {
         let runningApps = NSWorkspace.shared.runningApplications
         
-        let hasSpotify = runningApps.contains { $0.bundleIdentifier == "com.spotify.client" || $0.localizedName == "Spotify" }
-        let hasMusic = runningApps.contains { $0.bundleIdentifier == "com.apple.Music" || $0.localizedName == "Music" }
-        let hasBrave = runningApps.contains { $0.bundleIdentifier == "com.brave.Browser" || $0.localizedName == "Brave Browser" }
-        let hasChrome = runningApps.contains { $0.bundleIdentifier == "com.google.Chrome" || $0.localizedName == "Google Chrome" }
-        let hasArc = runningApps.contains { $0.bundleIdentifier == "company.thebrowser.Browser" || $0.localizedName == "Arc" }
-        let hasSafari = runningApps.contains { $0.bundleIdentifier == "com.apple.Safari" || $0.localizedName == "Safari" }
-        let hasEdge = runningApps.contains { $0.bundleIdentifier == "com.microsoft.edgemac" || $0.localizedName == "Microsoft Edge" }
+        let hasSpotify = runningApps.contains { app in
+            let id = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return id == "com.spotify.client" || name.localizedCaseInsensitiveContains("Spotify")
+        }
+        let hasMusic = runningApps.contains { app in
+            let id = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return id == "com.apple.Music" || name == "Music"
+        }
+        let hasBrave = runningApps.contains { app in
+            let id = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name == "YouTube" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube")
+        }
+        let hasChrome = runningApps.contains { app in
+            let id = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name == "Google Chrome" || name.localizedCaseInsensitiveContains("Chrome")
+        }
+        let hasArc = runningApps.contains { app in
+            let id = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return id == "company.thebrowser.Browser" || name == "Arc"
+        }
+        let hasSafari = runningApps.contains { app in
+            let id = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return id == "com.apple.Safari" || name == "Safari"
+        }
+        let hasEdge = runningApps.contains { app in
+            let id = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name == "Microsoft Edge" || name.localizedCaseInsensitiveContains("Edge")
+        }
 
         let rawScraper = """
         (function() {
