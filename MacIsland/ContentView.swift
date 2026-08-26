@@ -196,7 +196,7 @@ struct ContentView: View {
 
                     // Trailing Animated Audio Spectrum or Paused Indicator
                     if mediaManager.isPlaying {
-                        AudioSpectrumView()
+                        AudioSpectrumView(color: mediaManager.accentColor)
                             .padding(.trailing, 12)
                     } else if mediaManager.title != "Not Playing" {
                         Image(systemName: "play.fill")
@@ -313,7 +313,7 @@ struct WindowAccessor: NSViewRepresentable {
 }
 
 struct AudioSpectrumView: View {
-    private let greenColor = Color(red: 0.22, green: 0.86, blue: 0.45)
+    var color: Color = Color(red: 0.22, green: 0.86, blue: 0.45)
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
@@ -325,16 +325,16 @@ struct AudioSpectrumView: View {
 
             HStack(alignment: .bottom, spacing: 2) {
                 RoundedRectangle(cornerRadius: 1.2)
-                    .fill(greenColor)
+                    .fill(color)
                     .frame(width: 2.2, height: CGFloat(h1))
                 RoundedRectangle(cornerRadius: 1.2)
-                    .fill(greenColor)
+                    .fill(color)
                     .frame(width: 2.2, height: CGFloat(h2))
                 RoundedRectangle(cornerRadius: 1.2)
-                    .fill(greenColor)
+                    .fill(color)
                     .frame(width: 2.2, height: CGFloat(h3))
                 RoundedRectangle(cornerRadius: 1.2)
-                    .fill(greenColor)
+                    .fill(color)
                     .frame(width: 2.2, height: CGFloat(h4))
             }
             .frame(height: 15)

@@ -1,6 +1,14 @@
 import Foundation
 import AppKit
 import Combine
+import SwiftUI
+
+enum MediaService: String, Sendable {
+    case spotify
+    case youtube
+    case appleMusic
+    case other
+}
 
 final class MediaManager: ObservableObject {
     @Published var title: String = "Not Playing"
@@ -8,10 +16,24 @@ final class MediaManager: ObservableObject {
     @Published var artworkImage: NSImage? = nil
     @Published var isPlaying: Bool = false
     @Published var isYouTube: Bool = false
+    @Published var mediaService: MediaService = .other
     @Published var currentTime: Double = 0
     @Published var duration: Double = 0
     @Published var isScrubbing: Bool = false
     @Published var currentSource: String = ""
+    
+    var accentColor: Color {
+        switch mediaService {
+        case .spotify:
+            return Color(red: 0.22, green: 0.86, blue: 0.45) // Spotify Green
+        case .youtube:
+            return Color(red: 240/255.0, green: 179/255.0, blue: 36/255.0) // YouTube #f0b324
+        case .appleMusic:
+            return Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) // Apple Music Red
+        case .other:
+            return Color(red: 0.22, green: 0.86, blue: 0.45)
+        }
+    }
     
     private var timer: Timer?
     private var lastArtworkURL: String = ""
@@ -147,8 +169,15 @@ final class MediaManager: ObservableObject {
                 }
             }
 
+            var service = "other";
+            if (url.includes('youtube.com') || url.includes('youtu.be') || url.includes('music.youtube.com')) {
+                service = 'youtube';
+            } else if (url.includes('spotify.com')) {
+                service = 'spotify';
+            }
+
             if (track) {
-                return track.trim() + '|' + artist.trim() + '|' + isPlaying + '|' + (imgUrl || 'none') + '|' + Math.round(curPos) + '|' + Math.round(curDur);
+                return track.trim() + '|' + artist.trim() + '|' + isPlaying + '|' + (imgUrl || 'none') + '|' + Math.round(curPos) + '|' + Math.round(curDur) + '|' + service;
             }
             return 'null';
         })();
@@ -170,7 +199,7 @@ final class MediaManager: ObservableObject {
                         set trackArtist to (artist of current track)
                         set curPos to (player position)
                         set curDur to (duration of current track) / 1000
-                        return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur
+                        return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|spotify"
                     end if
                 end tell
             end try
@@ -187,7 +216,7 @@ final class MediaManager: ObservableObject {
                         set trackArtist to (artist of current track)
                         set curPos to (player position)
                         set curDur to (duration of current track)
-                        return "MusicNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur
+                        return "MusicNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|applemusic"
                     end if
                 end tell
             end try
@@ -254,7 +283,7 @@ final class MediaManager: ObservableObject {
                     set trackArtist to (artist of current track)
                     set curPos to (player position)
                     set curDur to (duration of current track) / 1000
-                    return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur
+                    return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|spotify"
                 end tell
             end try
             
@@ -269,7 +298,7 @@ final class MediaManager: ObservableObject {
                     set trackArtist to (artist of current track)
                     set curPos to (player position)
                     set curDur to (duration of current track)
-                    return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur
+                    return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|applemusic"
                 end tell
             end try
             
@@ -349,6 +378,18 @@ final class MediaManager: ObservableObject {
                 
                 let newIsYouTube = imgUrlString.contains("youtube.com") || imgUrlString.contains("ytimg.com") || imgUrlString.contains("youtu.be") || sourceApp.contains("YouTube")
                 
+                let serviceTag = parts.count >= 8 ? parts[7].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : ""
+                let newService: MediaService
+                if serviceTag == "spotify" || sourceApp == "SpotifyNative" || imgUrlString.contains("spotify.com") {
+                    newService = .spotify
+                } else if serviceTag == "youtube" || newIsYouTube {
+                    newService = .youtube
+                } else if serviceTag == "applemusic" || sourceApp == "MusicNative" {
+                    newService = .appleMusic
+                } else {
+                    newService = .other
+                }
+                
                 Task { @MainActor in
                     self.consecutiveNotPlayingCount = 0
                     self.currentSource = sourceApp
@@ -356,6 +397,7 @@ final class MediaManager: ObservableObject {
                     self.artist = newArtist
                     self.isPlaying = newIsPlaying
                     self.isYouTube = newIsYouTube
+                    self.mediaService = newService
                     if !self.isScrubbing && Date() >= self.seekLockUntil {
                         self.currentTime = newCurPos
                     }
@@ -419,6 +461,7 @@ final class MediaManager: ObservableObject {
                 self.isPlaying = false
                 self.artworkImage = nil
                 self.isYouTube = false
+                self.mediaService = .other
                 self.currentTime = 0
                 self.duration = 0
             }
