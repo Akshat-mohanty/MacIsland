@@ -15,6 +15,7 @@ final class MediaManager: ObservableObject {
     
     private var timer: Timer?
     private var lastArtworkURL: String = ""
+    private var seekLockUntil: Date = .distantPast
     
     init() {
         startPolling()
@@ -341,7 +342,7 @@ final class MediaManager: ObservableObject {
                     self.artist = newArtist
                     self.isPlaying = newIsPlaying
                     self.isYouTube = newIsYouTube
-                    if !self.isScrubbing {
+                    if !self.isScrubbing && Date() >= self.seekLockUntil {
                         self.currentTime = newCurPos
                     }
                     self.duration = newDuration
@@ -424,6 +425,7 @@ final class MediaManager: ObservableObject {
     
     func seek(to seconds: Double) {
         self.currentTime = seconds
+        self.seekLockUntil = Date().addingTimeInterval(1.2)
         let source = self.currentSource
         let runningApps = NSWorkspace.shared.runningApplications
         let hasBrave = runningApps.contains { app in
@@ -441,17 +443,45 @@ final class MediaManager: ObservableObject {
             if source == "SpotifyNative" {
                 scriptSource = """
                 try
-                    tell application "Spotify" to set player position to \(seconds)
+                    tell application "Spotify"
+                        set player position to \(seconds)
+                    end tell
                 end try
                 """
             } else if source == "MusicNative" {
                 scriptSource = """
                 try
-                    tell application "Music" to set player position to \(seconds)
+                    tell application "Music"
+                        set player position to \(seconds)
+                    end tell
                 end try
                 """
             } else {
-                let jsSeek = "(function() { var v = Array.from(document.querySelectorAll('video')).find(function(x){return !x.paused;}) || document.querySelector('.html5-main-video') || document.querySelector('video, audio'); if (v) { v.currentTime = \(seconds); } })();"
+                let jsSeek = """
+                (function() {
+                    var targetSec = \(seconds);
+                    var spotBar = document.querySelector('[data-testid="playback-progressbar"], [data-testid="progress-bar"]');
+                    if (spotBar) {
+                        var rect = spotBar.getBoundingClientRect();
+                        var dur = \(max(1, Int(self?.duration ?? 1)));
+                        var fraction = Math.min(Math.max(targetSec / dur, 0), 1);
+                        var clientX = rect.left + rect.width * fraction;
+                        var clientY = rect.top + rect.height / 2;
+                        var opts = { bubbles: true, cancelable: true, view: window, clientX: clientX, clientY: clientY };
+                        spotBar.dispatchEvent(new MouseEvent('mousedown', opts));
+                        spotBar.dispatchEvent(new MouseEvent('mouseup', opts));
+                        spotBar.dispatchEvent(new MouseEvent('click', opts));
+                    }
+                    var v = Array.from(document.querySelectorAll('video, audio')).find(function(x){return !x.paused;}) || document.querySelector('.html5-main-video') || document.querySelector('video, audio');
+                    if (v) {
+                        try { v.currentTime = targetSec; } catch(e) {}
+                    }
+                })();
+                """
+                
+                let escapedJsSeek = jsSeek
+                    .replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "\"", with: "\\\"")
                 
                 let browsers = [
                     ("Brave Browser", hasBrave),
@@ -467,7 +497,7 @@ final class MediaManager: ObservableObject {
                                 repeat with t in every tab of win
                                     set tabURL to URL of t
                                     if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                        execute t javascript "\(jsSeek)"
+                                        execute t javascript "\(escapedJsSeek)"
                                     end if
                                 end repeat
                             end repeat
@@ -485,7 +515,7 @@ final class MediaManager: ObservableObject {
                                 repeat with t in every tab of win
                                     set tabURL to URL of t
                                     if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                        do JavaScript "\(jsSeek)" in t
+                                        do JavaScript "\(escapedJsSeek)" in t
                                     end if
                                 end repeat
                             end repeat
