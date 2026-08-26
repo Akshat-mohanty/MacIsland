@@ -50,6 +50,6 @@ cd MacIsland/MacIsland
 
 ---
 
-## 📄 License
+##  License
 
-Open-source under the [MIT License](LICENSE).
+This application is open source and you can edit the contents as per your wish.
