@@ -199,10 +199,15 @@ struct ContentView: View {
                         AudioSpectrumView(color: mediaManager.accentColor)
                             .padding(.trailing, 12)
                     } else if mediaManager.title != "Not Playing" {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.6))
-                            .padding(.trailing, 13)
+                        Button(action: { mediaManager.togglePlayPause() }) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.85))
+                                .frame(width: 24, height: 24)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.trailing, 10)
                     }
                 }
                 .frame(width: collapsedWidth, height: collapsedHeight)

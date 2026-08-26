@@ -448,8 +448,6 @@ final class MediaManager: ObservableObject {
                     
                     if rate > 0 && !title.isEmpty {
                         mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
-                    } else if hasNetflixWebApp && (title.localizedCaseInsensitiveContains("netflix") || d["kMRMediaRemoteNowPlayingInfoArtworkData"] != nil) {
-                        mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: nil)
                     }
                 }
                 sema.signal()
@@ -604,12 +602,10 @@ final class MediaManager: ObservableObject {
         if hasNetflixWebApp {
             Task { @MainActor in
                 self.consecutiveNotPlayingCount = 0
-                if self.title == "Not Playing" || self.currentSource != "NetflixSafariWebApp" {
-                    self.isPlaying = true
-                }
                 self.currentSource = "NetflixSafariWebApp"
                 self.title = "Netflix"
                 self.artist = "Netflix"
+                self.isPlaying = false
                 self.isYouTube = false
                 self.isNetflix = true
                 self.mediaService = .netflix
@@ -690,13 +686,7 @@ final class MediaManager: ObservableObject {
             self.currentSource = service == .netflix ? "NetflixApp" : "MediaRemote"
             self.title = title
             self.artist = artist
-            if let explicit = isExplicitlyPlaying {
-                self.isPlaying = explicit
-            } else if service != .netflix {
-                self.isPlaying = isPlayingBool
-            } else if rateVal > 0 {
-                self.isPlaying = true
-            }
+            self.isPlaying = isPlayingBool
             self.isYouTube = service == .youtube
             self.isNetflix = service == .netflix
             self.mediaService = service
