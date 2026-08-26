@@ -40,7 +40,7 @@ cd MacIsland/MacIsland
 
 ---
 
-## 🛠️ Controls & Context Menu
+##  Controls & Context Menu
 
 - **Hover**: Move your mouse over the notch to expand the full media controller and progress scrubber.
 - **Mouse Exit**: Springs back to the compact notch instantly.
