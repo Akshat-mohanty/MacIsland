@@ -100,13 +100,21 @@ final class MediaManager: ObservableObject {
     func fetchNowPlayingInfo() {
         let runningApps = NSWorkspace.shared.runningApplications
         
-        // Strict bundle identifier matching to NEVER launch an unopen or uninstalled app
         let hasSpotify = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
         let hasMusic = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
-        let hasBrave = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.brave.Browser" }
-        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
+        let hasBrave = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app.")
+        }
+        let hasChrome = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app.")
+        }
         let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
-        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
+        let hasSafari = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            return id == "com.apple.Safari" || id.hasPrefix("com.apple.Safari.WebApp")
+        }
         let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.microsoft.edgemac" }
 
         let rawScraper = """
@@ -234,7 +242,7 @@ final class MediaManager: ObservableObject {
                 }
 
                 if (v) {
-                    isPlaying = (!v.paused && !v.ended && v.currentTime > 0) ? 'playing' : 'paused';
+                    isPlaying = (!v.paused && !v.ended) ? 'playing' : 'paused';
                 }
             }
 
@@ -268,6 +276,12 @@ final class MediaManager: ObservableObject {
                 service = 'spotify';
             } else if (url.includes('netflix.com')) {
                 service = 'netflix';
+            }
+
+            if (!track && url.includes('netflix.com')) {
+                track = document.title ? document.title.replace(/^Watch\\s+/i, '').replace(/\\s*[\\|\\-–—]\\s*Netflix.*$/i, '').trim() : 'Netflix';
+                if (!track || track.toLowerCase() === 'netflix') track = 'Netflix';
+                artist = 'Netflix';
             }
 
             if (track) {
@@ -421,41 +435,19 @@ final class MediaManager: ObservableObject {
             let sema = DispatchSemaphore(value: 0)
             var mediaRemoteActive = false
             
-            if let getIsPlaying = Self.mrGetIsPlaying {
-                getIsPlaying(DispatchQueue.global(qos: .userInitiated)) { isPlaying in
-                    if isPlaying {
-                        getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
-                            if let d = dict as? [String: Any], let self = self {
-                                mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
-                            }
-                            sema.signal()
-                        }
-                    } else {
-                        // Check if rate > 0 in dict
-                        getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
-                            if let d = dict as? [String: Any], let self = self {
-                                let rate = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
-                                if rate > 0 {
-                                    mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
-                                }
-                            }
-                            sema.signal()
-                        }
+            getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                if let d = dict as? [String: Any], let self = self {
+                    let rate = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
+                    let title = (d["kMRMediaRemoteNowPlayingInfoTitle"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    if rate > 0 && !title.isEmpty {
+                        mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
                     }
                 }
-            } else {
-                getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
-                    if let d = dict as? [String: Any], let self = self {
-                        let rate = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
-                        if rate > 0 {
-                            mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
-                        }
-                    }
-                    sema.signal()
-                }
+                sema.signal()
             }
             
-            _ = sema.wait(timeout: .now() + 0.15)
+            _ = sema.wait(timeout: .now() + 0.2)
             if mediaRemoteActive {
                 return
             }
