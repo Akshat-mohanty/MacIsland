@@ -430,7 +430,7 @@ final class MediaManager: ObservableObject {
             }
         }
 
-        // 3. Installed Netflix Safari Web App / Actively playing MediaRemote
+        // 3. Actively playing MediaRemote (covers installed Netflix Safari Web App, QuickTime, Podcasts, etc.)
         let hasNetflixWebApp = runningApps.contains {
             let id = $0.bundleIdentifier ?? ""
             let name = $0.localizedName ?? ""
@@ -448,8 +448,6 @@ final class MediaManager: ObservableObject {
                     
                     if rate > 0 && !title.isEmpty {
                         mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
-                    } else if hasNetflixWebApp && (title.localizedCaseInsensitiveContains("netflix") || d["kMRMediaRemoteNowPlayingInfoArtworkData"] != nil) {
-                        mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
                     }
                 }
                 sema.signal()
@@ -459,21 +457,6 @@ final class MediaManager: ObservableObject {
             if mediaRemoteActive {
                 return
             }
-        }
-        
-        if hasNetflixWebApp {
-            Task { @MainActor in
-                self.consecutiveNotPlayingCount = 0
-                self.currentSource = "NetflixSafariWebApp"
-                self.title = "Netflix"
-                self.artist = "Netflix"
-                self.isPlaying = true
-                self.isYouTube = false
-                self.isNetflix = true
-                self.mediaService = .netflix
-                self.loadAppIcon(for: "NetflixSafariWebApp")
-            }
-            return
         }
 
         // 4. Paused browser tabs (only for currently running browsers)
@@ -614,6 +597,21 @@ final class MediaManager: ObservableObject {
             if mediaRemoteHandled {
                 return
             }
+        }
+
+        if hasNetflixWebApp {
+            Task { @MainActor in
+                self.consecutiveNotPlayingCount = 0
+                self.currentSource = "NetflixSafariWebApp"
+                self.title = "Netflix"
+                self.artist = "Netflix"
+                self.isPlaying = false
+                self.isYouTube = false
+                self.isNetflix = true
+                self.mediaService = .netflix
+                self.loadAppIcon(for: "NetflixSafariWebApp")
+            }
+            return
         }
 
         setNotPlaying()
