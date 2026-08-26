@@ -304,42 +304,31 @@ struct WindowAccessor: NSViewRepresentable {
 }
 
 struct AudioSpectrumView: View {
-    @State private var phase1: CGFloat = 0.4
-    @State private var phase2: CGFloat = 0.8
-    @State private var phase3: CGFloat = 0.3
-    @State private var phase4: CGFloat = 0.9
-
     private let greenColor = Color(red: 0.22, green: 0.86, blue: 0.45)
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 2) {
-            RoundedRectangle(cornerRadius: 1.2)
-                .fill(greenColor)
-                .frame(width: 2.2, height: 3 + phase1 * 10)
-            RoundedRectangle(cornerRadius: 1.2)
-                .fill(greenColor)
-                .frame(width: 2.2, height: 3 + phase2 * 11)
-            RoundedRectangle(cornerRadius: 1.2)
-                .fill(greenColor)
-                .frame(width: 2.2, height: 3 + phase3 * 10)
-            RoundedRectangle(cornerRadius: 1.2)
-                .fill(greenColor)
-                .frame(width: 2.2, height: 3 + phase4 * 11)
-        }
-        .frame(height: 15)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.38).repeatForever(autoreverses: true)) {
-                phase1 = 0.95
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            let h1 = 3.0 + 8.5 * (0.5 + 0.5 * sin(time * 7.5))
+            let h2 = 3.0 + 9.5 * (0.5 + 0.5 * sin(time * 5.2 + 1.2))
+            let h3 = 3.0 + 8.0 * (0.5 + 0.5 * sin(time * 9.1 + 2.4))
+            let h4 = 3.0 + 9.0 * (0.5 + 0.5 * sin(time * 6.3 + 0.7))
+
+            HStack(alignment: .bottom, spacing: 2) {
+                RoundedRectangle(cornerRadius: 1.2)
+                    .fill(greenColor)
+                    .frame(width: 2.2, height: CGFloat(h1))
+                RoundedRectangle(cornerRadius: 1.2)
+                    .fill(greenColor)
+                    .frame(width: 2.2, height: CGFloat(h2))
+                RoundedRectangle(cornerRadius: 1.2)
+                    .fill(greenColor)
+                    .frame(width: 2.2, height: CGFloat(h3))
+                RoundedRectangle(cornerRadius: 1.2)
+                    .fill(greenColor)
+                    .frame(width: 2.2, height: CGFloat(h4))
             }
-            withAnimation(.easeInOut(duration: 0.48).repeatForever(autoreverses: true)) {
-                phase2 = 0.25
-            }
-            withAnimation(.easeInOut(duration: 0.42).repeatForever(autoreverses: true)) {
-                phase3 = 1.0
-            }
-            withAnimation(.easeInOut(duration: 0.52).repeatForever(autoreverses: true)) {
-                phase4 = 0.2
-            }
+            .frame(height: 15)
         }
     }
 }
