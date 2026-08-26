@@ -195,10 +195,28 @@ final class MediaManager: ObservableObject {
             try
                 tell application "Spotify"
                     if player state is playing then
-                        set trackName to (name of current track)
-                        set trackArtist to (artist of current track)
-                        set curPos to (player position)
-                        set curDur to (duration of current track) / 1000
+                        set trackName to ""
+                        try
+                            set trackName to (name of current track as text)
+                        end try
+                        set trackArtist to ""
+                        try
+                            if (artist of current track) is not missing value then
+                                set trackArtist to (artist of current track as text)
+                            end if
+                        end try
+                        set curPos to 0
+                        try
+                            if (player position) is not missing value then
+                                set curPos to (player position)
+                            end if
+                        end try
+                        set curDur to 0
+                        try
+                            if (duration of current track) is not missing value then
+                                set curDur to (duration of current track) / 1000
+                            end if
+                        end try
                         return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|spotify"
                     end if
                 end tell
@@ -212,10 +230,28 @@ final class MediaManager: ObservableObject {
             try
                 tell application "Music"
                     if player state is playing then
-                        set trackName to (name of current track)
-                        set trackArtist to (artist of current track)
-                        set curPos to (player position)
-                        set curDur to (duration of current track)
+                        set trackName to ""
+                        try
+                            set trackName to (name of current track as text)
+                        end try
+                        set trackArtist to ""
+                        try
+                            if (artist of current track) is not missing value then
+                                set trackArtist to (artist of current track as text)
+                            end if
+                        end try
+                        set curPos to 0
+                        try
+                            if (player position) is not missing value then
+                                set curPos to (player position)
+                            end if
+                        end try
+                        set curDur to 0
+                        try
+                            if (duration of current track) is not missing value then
+                                set curDur to (duration of current track)
+                            end if
+                        end try
                         return "MusicNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|applemusic"
                     end if
                 end tell
@@ -279,10 +315,28 @@ final class MediaManager: ObservableObject {
             scriptSource += """
             try
                 tell application "Spotify"
-                    set trackName to (name of current track)
-                    set trackArtist to (artist of current track)
-                    set curPos to (player position)
-                    set curDur to (duration of current track) / 1000
+                    set trackName to ""
+                    try
+                        set trackName to (name of current track as text)
+                    end try
+                    set trackArtist to ""
+                    try
+                        if (artist of current track) is not missing value then
+                            set trackArtist to (artist of current track as text)
+                        end if
+                    end try
+                    set curPos to 0
+                    try
+                        if (player position) is not missing value then
+                            set curPos to (player position)
+                        end if
+                    end try
+                    set curDur to 0
+                    try
+                        if (duration of current track) is not missing value then
+                            set curDur to (duration of current track) / 1000
+                        end if
+                    end try
                     return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|spotify"
                 end tell
             end try
@@ -294,10 +348,28 @@ final class MediaManager: ObservableObject {
             scriptSource += """
             try
                 tell application "Music"
-                    set trackName to (name of current track)
-                    set trackArtist to (artist of current track)
-                    set curPos to (player position)
-                    set curDur to (duration of current track)
+                    set trackName to ""
+                    try
+                        set trackName to (name of current track as text)
+                    end try
+                    set trackArtist to ""
+                    try
+                        if (artist of current track) is not missing value then
+                            set trackArtist to (artist of current track as text)
+                        end if
+                    end try
+                    set curPos to 0
+                    try
+                        if (player position) is not missing value then
+                            set curPos to (player position)
+                        end if
+                    end try
+                    set curDur to 0
+                    try
+                        if (duration of current track) is not missing value then
+                            set curDur to (duration of current track)
+                        end if
+                    end try
                     return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|applemusic"
                 end tell
             end try
@@ -480,6 +552,13 @@ final class MediaManager: ObservableObject {
         runControlCommand("previous track")
     }
     
+    private typealias MRSendCommandFunc = @convention(c) (Int32, CFDictionary?) -> Bool
+    private static let mediaRemoteHandle: UnsafeMutableRawPointer? = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_NOW)
+    private static let mrSendCommand: MRSendCommandFunc? = {
+        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRMediaRemoteSendCommand") else { return nil }
+        return unsafeBitCast(sym, to: MRSendCommandFunc.self)
+    }()
+    
     func seek(to seconds: Double) {
         self.currentTime = seconds
         self.seekLockUntil = Date().addingTimeInterval(1.2)
@@ -493,6 +572,15 @@ final class MediaManager: ObservableObject {
         let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
         let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
         let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
+
+        if source == "MusicNative" || source == "SpotifyNative" {
+            if let sendCommand = Self.mrSendCommand {
+                let options: [String: Any] = [
+                    "kMRMediaRemoteOptionPlaybackPosition": seconds
+                ]
+                _ = sendCommand(26, options as CFDictionary)
+            }
+        }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var scriptSource = ""
@@ -509,7 +597,12 @@ final class MediaManager: ObservableObject {
                 scriptSource = """
                 try
                     tell application "Music"
-                        set player position to \(seconds)
+                        try
+                            set player position to (\(seconds) as real)
+                        end try
+                        try
+                            set player position to (\(Int(seconds)) as integer)
+                        end try
                     end tell
                 end try
                 """
