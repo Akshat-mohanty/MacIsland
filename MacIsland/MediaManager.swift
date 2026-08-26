@@ -36,8 +36,15 @@ final class MediaManager: ObservableObject {
     }
     
     private var timer: Timer?
+    private var progressTimer: Timer?
     private var lastArtworkURL: String = ""
     private var seekLockUntil: Date = .distantPast
+    
+    private typealias MRGetNowPlayingInfoFunc = @convention(c) (DispatchQueue, @escaping (CFDictionary?) -> Void) -> Void
+    private static let mrGetNowPlayingInfo: MRGetNowPlayingInfoFunc? = {
+        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRMediaRemoteGetNowPlayingInfo") else { return nil }
+        return unsafeBitCast(sym, to: MRGetNowPlayingInfoFunc.self)
+    }()
     
     init() {
         startPolling()
@@ -47,6 +54,17 @@ final class MediaManager: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             DispatchQueue.global(qos: .userInitiated).async {
                 self?.fetchNowPlayingInfo()
+            }
+        }
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                if self.isPlaying && !self.isScrubbing && self.duration > 0 && Date() >= self.seekLockUntil {
+                    let nextTime = self.currentTime + 0.1
+                    if nextTime <= self.duration {
+                        self.currentTime = nextTime
+                    }
+                }
             }
         }
         DispatchQueue.global(qos: .userInitiated).async {
@@ -471,7 +489,9 @@ final class MediaManager: ObservableObject {
                     self.isYouTube = newIsYouTube
                     self.mediaService = newService
                     if !self.isScrubbing && Date() >= self.seekLockUntil {
-                        self.currentTime = newCurPos
+                        if sourceApp != "MusicNative" || newCurPos > 0 {
+                            self.currentTime = newCurPos
+                        }
                     }
                     self.duration = newDuration
                     
@@ -494,6 +514,29 @@ final class MediaManager: ObservableObject {
                     } else {
                         self.lastArtworkURL = ""
                         self.loadAppIcon(for: sourceApp)
+                    }
+                }
+
+                if sourceApp == "MusicNative" || (sourceApp == "SpotifyNative" && newCurPos == 0) {
+                    if let getInfo = Self.mrGetNowPlayingInfo {
+                        getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                            guard let self = self, let d = dict as? [String: Any] else { return }
+                            let elapsed = d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0
+                            let rate = d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? (newIsPlaying ? 1.0 : 0.0)
+                            let timestamp = d["kMRMediaRemoteNowPlayingInfoTimestamp"] as? Date ?? Date()
+                            let timeSince = Date().timeIntervalSince(timestamp)
+                            let calculatedPos = max(0, rate > 0 ? (elapsed + timeSince * rate) : elapsed)
+                            
+                            Task { @MainActor in
+                                if !self.isScrubbing && Date() >= self.seekLockUntil {
+                                    if self.duration > 0 {
+                                        self.currentTime = min(calculatedPos, self.duration)
+                                    } else {
+                                        self.currentTime = calculatedPos
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             } else {
