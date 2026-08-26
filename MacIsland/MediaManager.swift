@@ -212,7 +212,7 @@ final class MediaManager: ObservableObject {
             scriptSource += """
             try
                 tell application "Spotify"
-                    if player state is playing then
+                    if (player state as string) is "playing" then
                         set trackName to ""
                         try
                             set trackName to (name of current track as text)
@@ -247,7 +247,7 @@ final class MediaManager: ObservableObject {
             scriptSource += """
             try
                 tell application "Music"
-                    if player state is playing then
+                    if (player state as string) is "playing" then
                         set trackName to ""
                         try
                             set trackName to (name of current track as text)
@@ -294,7 +294,8 @@ final class MediaManager: ObservableObject {
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                set res to execute t javascript webScraper
+                                set res to ""
+                                tell t to set res to execute javascript webScraper
                                 if res is not missing value and res is not "null" and res contains "|playing|" then
                                     return "\(tag)|" & res
                                 end if
@@ -404,7 +405,8 @@ final class MediaManager: ObservableObject {
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                set res to execute t javascript webScraper
+                                set res to ""
+                                tell t to set res to execute javascript webScraper
                                 if res is not missing value and res is not "null" then
                                     return "\(tag)|" & res
                                 end if
@@ -674,7 +676,7 @@ final class MediaManager: ObservableObject {
                                 repeat with t in every tab of win
                                     set tabURL to URL of t
                                     if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                        execute t javascript "\(escapedJsSeek)"
+                                        tell t to execute javascript "\(escapedJsSeek)"
                                     end if
                                 end repeat
                             end repeat
@@ -812,7 +814,7 @@ final class MediaManager: ObservableObject {
                                 repeat with t in every tab of win
                                     set tabURL to URL of t
                                     if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                        execute t javascript "\(escapedJsCmd)"
+                                        tell t to execute javascript "\(escapedJsCmd)"
                                     end if
                                 end repeat
                             end repeat
