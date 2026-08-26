@@ -143,7 +143,7 @@ final class MediaManager: ObservableObject {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
 
-        var scriptSource = "set webScraper to \"" + escapedScraper + "\"\n"
+        var scriptSource = "set webScraper to \"" + escapedScraper + "\"\n\n"
 
         // 1. Actively playing native apps
         if hasSpotify {
@@ -159,6 +159,7 @@ final class MediaManager: ObservableObject {
                     end if
                 end tell
             end try
+            
             """
         }
 
@@ -175,6 +176,7 @@ final class MediaManager: ObservableObject {
                     end if
                 end tell
             end try
+            
             """
         }
 
@@ -203,6 +205,7 @@ final class MediaManager: ObservableObject {
                     end repeat
                 end tell
             end try
+            
             """
         }
 
@@ -223,6 +226,7 @@ final class MediaManager: ObservableObject {
                     end repeat
                 end tell
             end try
+            
             """
         }
 
@@ -238,6 +242,7 @@ final class MediaManager: ObservableObject {
                     return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur
                 end tell
             end try
+            
             """
         }
 
@@ -252,6 +257,7 @@ final class MediaManager: ObservableObject {
                     return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur
                 end tell
             end try
+            
             """
         }
 
@@ -273,6 +279,7 @@ final class MediaManager: ObservableObject {
                     end repeat
                 end tell
             end try
+            
             """
         }
 
@@ -293,6 +300,7 @@ final class MediaManager: ObservableObject {
                     end repeat
                 end tell
             end try
+            
             """
         }
 
