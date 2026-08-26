@@ -184,12 +184,12 @@ struct ContentView: View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 18, height: 18)
                             .clipShape(RoundedRectangle(cornerRadius: 4.5))
-                            .padding(.leading, 18)
+                            .padding(.leading, 12)
                     } else if mediaManager.title != "Not Playing" || mediaManager.isPlaying {
                         Image(systemName: "music.note")
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundColor(.white.opacity(0.85))
-                            .padding(.leading, 19)
+                            .padding(.leading, 13)
                     }
 
                     Spacer()
@@ -197,12 +197,12 @@ struct ContentView: View {
                     // Trailing Animated Audio Spectrum or Paused Indicator
                     if mediaManager.isPlaying {
                         AudioSpectrumView()
-                            .padding(.trailing, 18)
+                            .padding(.trailing, 12)
                     } else if mediaManager.title != "Not Playing" {
                         Image(systemName: "play.fill")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(.white.opacity(0.6))
-                            .padding(.trailing, 19)
+                            .padding(.trailing, 13)
                     }
                 }
                 .frame(width: collapsedWidth, height: collapsedHeight)
@@ -212,21 +212,21 @@ struct ContentView: View {
             .frame(width: isExpanded ? expandedWidth : collapsedWidth, height: isExpanded ? expandedHeight : collapsedHeight)
             .background(
                 NotchShape(
-                    topRadius: isExpanded ? 12 : 10,
-                    bottomRadius: isExpanded ? 24 : 14
+                    topRadius: isExpanded ? 5.5 : 4.0,
+                    bottomRadius: isExpanded ? 22.0 : 12.0
                 )
                 .fill(Color.black)
             )
             .clipShape(
                 NotchShape(
-                    topRadius: isExpanded ? 12 : 10,
-                    bottomRadius: isExpanded ? 24 : 14
+                    topRadius: isExpanded ? 5.5 : 4.0,
+                    bottomRadius: isExpanded ? 22.0 : 12.0
                 )
             )
             .contentShape(
                 NotchShape(
-                    topRadius: isExpanded ? 12 : 10,
-                    bottomRadius: isExpanded ? 24 : 14
+                    topRadius: isExpanded ? 5.5 : 4.0,
+                    bottomRadius: isExpanded ? 22.0 : 12.0
                 )
             )
             .onHover { hovering in
