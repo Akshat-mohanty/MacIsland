@@ -1,32 +1,68 @@
-# MacIsland
+# MacIsland 🏝️
 
-MacIsland brings the iOS Dynamic Island experience to your Mac! It sits elegantly at the top of your screen, providing real-time "Now Playing" media information and interactive playback controls without interrupting your workflow.
+**MacIsland** brings an authentic Apple Dynamic Island experience to macOS. It sits seamlessly at the top of your screen, contouring around the MacBook notch or display bezel, providing real-time "Now Playing" media information, interactive scrubbing, and media controls without stealing window focus.
 
-## Features
+---
 
-- **System-Wide Media Detection:** Natively detects and controls playback for Apple Music and the Spotify Desktop app.
-- **Advanced Web Scraper:** Intelligently finds media playing in background browser tabs.
-  - Supports **Safari** and **Brave Browser** (including installed PWAs).
-  - Perfect extraction of track names and artist metadata from **Spotify Web** and **YouTube**.
-- **Live Album Art:** Scrapes and displays the actual high-res album artwork or video thumbnails directly in the Dynamic Island.
-- **Universal Controls:** Interactive Play, Pause, Skip Forward, and Skip Backward buttons right on the island.
-- **True Background Agent:** Runs completely silently in the background. It will never steal your focus or clutter your Dock.
+## ✨ Features
 
-## Requirements
+- **Authentic Apple Notch Design**: Precise concave top ears and squircle curves matching the physical MacBook Pro display bezel.
+- **System-Wide & Desktop Media Support**: Native detection and playback controls for **Apple Music** and **Spotify Desktop**.
+- **Browser & PWA Web Detection**: Real-time track information and duration from **YouTube**, **YouTube Music**, **Spotify Web**, and installed standalone web apps on **Brave Browser**, **Google Chrome**, **Safari**, **Arc**, and **Microsoft Edge**.
+- **Interactive Scrubber & Dynamic Island Controls**:
+  - Live album art & YouTube video thumbnails.
+  - Interactive scrubbing progress bar.
+  - Play, Pause, Skip (+10s), and Rewind (-10s) controls.
+- **Zero Window Focus Stealing**: Runs as an ultra-lightweight non-activating status bar overlay that will never interrupt your active apps.
 
-- macOS 13.0 or later
-- **Safari / Brave Browser:** For web media detection, you must enable "Allow JavaScript from Apple Events" in the browser's Developer menu.
+---
 
-## Setup & Installation
+## 🚀 Quick Start (Running from Source)
 
-1. Open `MacIsland.xcodeproj` in Xcode.
-2. Build and run the project.
-3. (Optional) If prompted, grant MacIsland accessibility or automation permissions to control Spotify and your web browsers.
+### Option 1: 1-Click Terminal Command *(Recommended)*
 
-## How It Works
+Open Terminal and run:
 
-MacIsland uses a pure AppKit background lifecycle to remain invisible to the app switcher. For media detection, it bypasses restrictive private APIs by utilizing AppleScript and targeted JavaScript DOM injection to read and control media players flawlessly.
+```bash
+git clone https://github.com/Akshat-mohanty/MacIsland.git
+cd MacIsland/MacIsland
+./run.sh
+```
 
-## License
+`./run.sh` will automatically build the project and launch **MacIsland** in the background.
 
-This project is open-source and available under the MIT License.
+---
+
+### Option 2: Open in Xcode
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Akshat-mohanty/MacIsland.git
+   ```
+2. Open `MacIsland.xcodeproj` in **Xcode**.
+3. Press **`Cmd + R`** (or click the **Play** button at the top) to build and run.
+
+---
+
+## ⚙️ Requirements & Permissions
+
+- **macOS**: 13.0 (Ventura) or later.
+- **For Browser / Web App Media (Brave / Chrome / Safari)**:
+  - In **Brave / Chrome**: Go to **View** ➔ **Developer** ➔ Ensure **"Allow JavaScript from Apple Events"** is checked.
+  - In **System Settings** ➔ **Privacy & Security** ➔ **Automation**: Ensure **MacIsland** has permission toggled **ON** for your browser and media apps.
+
+---
+
+## 🛠️ Controls & Context Menu
+
+- **Hover**: Move your mouse over the notch to expand the full media controller and progress scrubber.
+- **Mouse Exit**: Springs back to the compact notch instantly.
+- **Right-Click on the Island**:
+  - Toggle Dock Icon visibility (show/hide).
+  - Quit MacIsland.
+
+---
+
+## 📄 License
+
+Open-source under the [MIT License](LICENSE).
