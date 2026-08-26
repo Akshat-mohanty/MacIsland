@@ -271,6 +271,9 @@ class MediaManager {
         executeScriptAndParse(scriptSource)
     }
     
+    private static let artworkCache = NSCache<NSString, NSImage>()
+    private var consecutiveNotPlayingCount = 0
+    
     private func executeScriptAndParse(_ scriptSource: String) {
         guard let script = NSAppleScript(source: scriptSource) else {
             setNotPlaying()
@@ -293,78 +296,37 @@ class MediaManager {
                 
                 let newIsYouTube = imgUrlString.contains("youtube.com") || imgUrlString.contains("ytimg.com") || imgUrlString.contains("youtu.be") || sourceApp.contains("YouTube")
                 
-                if imgUrlString != "none" && !imgUrlString.isEmpty, let url = URL(string: imgUrlString) {
-                    if self.lastArtworkURL == imgUrlString && self.artworkImage != nil {
-                        Task { @MainActor in
-                            self.currentSource = sourceApp
-                            self.title = newTitle
-                            self.artist = newArtist
-                            self.isPlaying = newIsPlaying
-                            self.isYouTube = newIsYouTube
-                            if !self.isScrubbing {
-                                self.currentTime = newCurPos
+                Task { @MainActor in
+                    self.consecutiveNotPlayingCount = 0
+                    self.currentSource = sourceApp
+                    self.title = newTitle
+                    self.artist = newArtist
+                    self.isPlaying = newIsPlaying
+                    self.isYouTube = newIsYouTube
+                    if !self.isScrubbing {
+                        self.currentTime = newCurPos
+                    }
+                    self.duration = newDuration
+                    
+                    if imgUrlString != "none" && !imgUrlString.isEmpty {
+                        if let cached = Self.artworkCache.object(forKey: imgUrlString as NSString) {
+                            self.artworkImage = cached
+                        } else if self.lastArtworkURL != imgUrlString, let url = URL(string: imgUrlString) {
+                            self.lastArtworkURL = imgUrlString
+                            Task.detached(priority: .userInitiated) {
+                                if let data = try? Data(contentsOf: url), let img = NSImage(data: data) {
+                                    await MainActor.run {
+                                        Self.artworkCache.setObject(img, forKey: imgUrlString as NSString)
+                                        if self.lastArtworkURL == imgUrlString {
+                                            self.artworkImage = img
+                                        }
+                                    }
+                                }
                             }
-                            self.duration = newDuration
                         }
                     } else {
-                        // Fetch artwork asynchronously
-                        Task {
-                            if let data = try? Data(contentsOf: url), let image = NSImage(data: data) {
-                                await MainActor.run {
-                                    self.lastArtworkURL = imgUrlString
-                                    self.currentSource = sourceApp
-                                    self.title = newTitle
-                                    self.artist = newArtist
-                                    self.isPlaying = newIsPlaying
-                                    self.isYouTube = newIsYouTube
-                                    if !self.isScrubbing {
-                                        self.currentTime = newCurPos
-                                    }
-                                    self.duration = newDuration
-                                    self.artworkImage = image
-                                }
-                            } else {
-                                await MainActor.run {
-                                    self.currentSource = sourceApp
-                                    self.title = newTitle
-                                    self.artist = newArtist
-                                    self.isPlaying = newIsPlaying
-                                    self.isYouTube = newIsYouTube
-                                    if !self.isScrubbing {
-                                        self.currentTime = newCurPos
-                                    }
-                                    self.duration = newDuration
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Fallback to app icon
-                    let bundleId: String
-                    if sourceApp == "SpotifyNative" { bundleId = "com.spotify.client" }
-                    else if sourceApp == "MusicNative" { bundleId = "com.apple.Music" }
-                    else if sourceApp == "Brave" { bundleId = "com.brave.Browser" }
-                    else if sourceApp == "Chrome" { bundleId = "com.google.Chrome" }
-                    else if sourceApp == "Arc" { bundleId = "company.thebrowser.Browser" }
-                    else { bundleId = "com.apple.Safari" }
-                    
-                    var newArtworkImage: NSImage? = nil
-                    if let appUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
-                        newArtworkImage = NSWorkspace.shared.icon(forFile: appUrl.path)
-                    }
-                    
-                    Task { @MainActor in
                         self.lastArtworkURL = ""
-                        self.currentSource = sourceApp
-                        self.title = newTitle
-                        self.artist = newArtist
-                        self.isPlaying = newIsPlaying
-                        self.isYouTube = newIsYouTube
-                        if !self.isScrubbing {
-                            self.currentTime = newCurPos
-                        }
-                        self.duration = newDuration
-                        self.artworkImage = newArtworkImage
+                        self.loadAppIcon(for: sourceApp)
                     }
                 }
             } else {
@@ -375,17 +337,38 @@ class MediaManager {
         }
     }
     
+    private func loadAppIcon(for sourceApp: String) {
+        let bundleId: String
+        if sourceApp == "SpotifyNative" { bundleId = "com.spotify.client" }
+        else if sourceApp == "MusicNative" { bundleId = "com.apple.Music" }
+        else if sourceApp == "Brave" { bundleId = "com.brave.Browser" }
+        else if sourceApp == "Chrome" { bundleId = "com.google.Chrome" }
+        else if sourceApp == "Arc" { bundleId = "company.thebrowser.Browser" }
+        else { bundleId = "com.apple.Safari" }
+        
+        if let cached = Self.artworkCache.object(forKey: bundleId as NSString) {
+            self.artworkImage = cached
+        } else if let appUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+            let img = NSWorkspace.shared.icon(forFile: appUrl.path)
+            Self.artworkCache.setObject(img, forKey: bundleId as NSString)
+            self.artworkImage = img
+        }
+    }
+    
     private func setNotPlaying() {
         Task { @MainActor in
-            self.lastArtworkURL = ""
-            self.currentSource = ""
-            self.title = "Not Playing"
-            self.artist = ""
-            self.isPlaying = false
-            self.artworkImage = nil
-            self.isYouTube = false
-            self.currentTime = 0
-            self.duration = 0
+            self.consecutiveNotPlayingCount += 1
+            if self.consecutiveNotPlayingCount >= 3 {
+                self.lastArtworkURL = ""
+                self.currentSource = ""
+                self.title = "Not Playing"
+                self.artist = ""
+                self.isPlaying = false
+                self.artworkImage = nil
+                self.isYouTube = false
+                self.currentTime = 0
+                self.duration = 0
+            }
         }
     }
     

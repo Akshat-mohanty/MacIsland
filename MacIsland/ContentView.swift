@@ -28,186 +28,181 @@ struct ContentView: View {
             Color.clear
             
             // The Island Container
-            Group {
-                if isExpanded {
-                    VStack(spacing: 7) {
-                        // Top Row: Artwork + Track Details + Playback Controls
-                        HStack(alignment: .center, spacing: 12) {
-                            if let artwork = mediaManager.artworkImage {
-                                Image(nsImage: artwork)
-                                    .resizable()
-                                    .aspectRatio(contentMode: mediaManager.isYouTube ? .fit : .fill)
-                                    .frame(width: mediaManager.isYouTube ? 36 : 42, height: mediaManager.isYouTube ? 36 : 42)
-                                    .clipShape(RoundedRectangle(cornerRadius: mediaManager.isYouTube ? 5 : 8))
-                                    .shadow(color: .white.opacity(0.12), radius: 3)
-                                    .frame(width: 42, height: 42)
-                            } else {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(Color(white: 0.15))
-                                    Image(systemName: "music.note")
-                                        .font(.system(size: 20))
-                                        .foregroundColor(.white.opacity(0.8))
-                                }
-                                .frame(width: 42, height: 42)
-                            }
-                        
-                            // Track Title and Artist
-                            VStack(alignment: .leading, spacing: 2.5) {
-                                Text(mediaManager.title)
-                                    .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                                    .foregroundColor(.white)
-                                    .lineLimit(1)
-                                Text(mediaManager.artist.isEmpty ? "Unknown Artist" : mediaManager.artist)
-                                    .font(.system(size: 11.5, weight: .medium, design: .rounded))
-                                    .foregroundColor(Color(white: 0.65))
-                                    .lineLimit(1)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                            // Media Controls
-                            HStack(spacing: 6) {
-                                Button(action: { mediaManager.skipBackward() }) {
-                                    Image(systemName: "backward.fill")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundColor(.white.opacity(0.9))
-                                        .frame(width: 28, height: 28)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                
-                                Button(action: { mediaManager.togglePlayPause() }) {
-                                    Image(systemName: mediaManager.isPlaying ? "pause.fill" : "play.fill")
-                                        .font(.system(size: 17, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .frame(width: 32, height: 28)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                                
-                                Button(action: { mediaManager.skipForward() }) {
-                                    Image(systemName: "forward.fill")
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundColor(.white.opacity(0.9))
-                                        .frame(width: 28, height: 28)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 9)
-
-                        // Bottom Row: Scrubber / Progress Bar
-                        if mediaManager.duration > 0 {
-                            HStack(spacing: 8) {
-                                Text(MediaManager.formatTime(isDraggingSlider ? dragSliderTime : mediaManager.currentTime))
-                                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                                    .foregroundColor(Color(white: 0.55))
-                                    .frame(width: 34, alignment: .leading)
-
-                                GeometryReader { geometry in
-                                    let totalWidth = geometry.size.width
-                                    let current = isDraggingSlider ? dragSliderTime : mediaManager.currentTime
-                                    let progress = min(max(current / max(mediaManager.duration, 1), 0), 1)
-                                    let currentPos = totalWidth * CGFloat(progress)
-
-                                    ZStack(alignment: .leading) {
-                                        // Background track
-                                        Capsule()
-                                            .fill(Color.white.opacity(0.22))
-                                            .frame(height: isHoveringSlider || isDraggingSlider ? 5 : 3.5)
-
-                                        // Progress filled track
-                                        Capsule()
-                                            .fill(Color.white)
-                                            .frame(width: max(currentPos, 0), height: isHoveringSlider || isDraggingSlider ? 5 : 3.5)
-
-                                        // Thumb Knob
-                                        Circle()
-                                            .fill(Color.white)
-                                            .frame(width: 9, height: 9)
-                                            .shadow(color: .black.opacity(0.45), radius: 2)
-                                            .offset(x: max(0, min(currentPos - 4.5, totalWidth - 9)))
-                                            .opacity(isHoveringSlider || isDraggingSlider ? 1 : 0)
-                                    }
-                                    .frame(height: 12)
-                                    .contentShape(Rectangle())
-                                    .onHover { hovering in
-                                        withAnimation(.easeInOut(duration: 0.15)) {
-                                            isHoveringSlider = hovering
-                                        }
-                                    }
-                                    .gesture(
-                                        DragGesture(minimumDistance: 0)
-                                            .onChanged { value in
-                                                mediaManager.isScrubbing = true
-                                                isDraggingSlider = true
-                                                let clampedX = max(0, min(value.location.x, totalWidth))
-                                                let newFraction = Double(clampedX / totalWidth)
-                                                dragSliderTime = newFraction * mediaManager.duration
-                                            }
-                                            .onEnded { value in
-                                                let clampedX = max(0, min(value.location.x, totalWidth))
-                                                let newFraction = Double(clampedX / totalWidth)
-                                                let targetTime = newFraction * mediaManager.duration
-                                                dragSliderTime = targetTime
-                                                mediaManager.seek(to: targetTime)
-                                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                                    mediaManager.isScrubbing = false
-                                                    isDraggingSlider = false
-                                                }
-                                            }
-                                    )
-                                }
-                                .frame(height: 12)
-
-                                Text(MediaManager.formatTime(mediaManager.duration))
-                                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                                    .foregroundColor(Color(white: 0.55))
-                                    .frame(width: 34, alignment: .trailing)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.bottom, 7)
-                        }
-                    }
-                    .frame(width: expandedWidth, height: expandedHeight)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.95)),
-                        removal: .opacity.combined(with: .scale(scale: 0.92))
-                    ))
-                } else {
-                    // Compact Notch View
-                    HStack(spacing: 0) {
-                        // Leading Artwork / Music Icon
+            ZStack {
+                // Expanded View
+                VStack(spacing: 7) {
+                    // Top Row: Artwork + Track Details + Playback Controls
+                    HStack(alignment: .center, spacing: 12) {
                         if let artwork = mediaManager.artworkImage {
                             Image(nsImage: artwork)
                                 .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 18, height: 18)
-                                .clipShape(RoundedRectangle(cornerRadius: 4.5))
-                                .padding(.leading, 12)
-                        } else if mediaManager.isPlaying {
-                            Image(systemName: "music.note")
-                                .font(.system(size: 11.5, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.85))
-                                .padding(.leading, 13)
+                                .aspectRatio(contentMode: mediaManager.isYouTube ? .fit : .fill)
+                                .frame(width: mediaManager.isYouTube ? 36 : 42, height: mediaManager.isYouTube ? 36 : 42)
+                                .clipShape(RoundedRectangle(cornerRadius: mediaManager.isYouTube ? 5 : 8))
+                                .shadow(color: .white.opacity(0.12), radius: 3)
+                                .frame(width: 42, height: 42)
+                        } else {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .fill(Color(white: 0.15))
+                                Image(systemName: "music.note")
+                                    .font(.system(size: 20))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                            .frame(width: 42, height: 42)
                         }
+                    
+                        // Track Title and Artist
+                        VStack(alignment: .leading, spacing: 2.5) {
+                            Text(mediaManager.title)
+                                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            Text(mediaManager.artist.isEmpty ? "Unknown Artist" : mediaManager.artist)
+                                .font(.system(size: 11.5, weight: .medium, design: .rounded))
+                                .foregroundColor(Color(white: 0.65))
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Spacer()
-
-                        // Trailing Animated Audio Spectrum
-                        if mediaManager.isPlaying {
-                            AudioSpectrumView()
-                                .padding(.trailing, 13)
+                        // Media Controls
+                        HStack(spacing: 6) {
+                            Button(action: { mediaManager.skipBackward() }) {
+                                Image(systemName: "backward.fill")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.9))
+                                    .frame(width: 28, height: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Button(action: { mediaManager.togglePlayPause() }) {
+                                Image(systemName: mediaManager.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 17, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .frame(width: 32, height: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            
+                            Button(action: { mediaManager.skipForward() }) {
+                                Image(systemName: "forward.fill")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.9))
+                                    .frame(width: 28, height: 28)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .frame(width: collapsedWidth, height: collapsedHeight)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.92)),
-                        removal: .opacity.combined(with: .scale(scale: 0.92))
-                    ))
+                    .padding(.horizontal, 16)
+                    .padding(.top, 9)
+
+                    // Bottom Row: Scrubber / Progress Bar
+                    if mediaManager.duration > 0 {
+                        HStack(spacing: 8) {
+                            Text(MediaManager.formatTime(isDraggingSlider ? dragSliderTime : mediaManager.currentTime))
+                                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                                .foregroundColor(Color(white: 0.55))
+                                .frame(width: 34, alignment: .leading)
+
+                            GeometryReader { geometry in
+                                let totalWidth = geometry.size.width
+                                let current = isDraggingSlider ? dragSliderTime : mediaManager.currentTime
+                                let progress = min(max(current / max(mediaManager.duration, 1), 0), 1)
+                                let currentPos = totalWidth * CGFloat(progress)
+
+                                ZStack(alignment: .leading) {
+                                    // Background track
+                                    Capsule()
+                                        .fill(Color.white.opacity(0.22))
+                                        .frame(height: isHoveringSlider || isDraggingSlider ? 5 : 3.5)
+
+                                    // Progress filled track
+                                    Capsule()
+                                        .fill(Color.white)
+                                        .frame(width: max(currentPos, 0), height: isHoveringSlider || isDraggingSlider ? 5 : 3.5)
+
+                                    // Thumb Knob
+                                    Circle()
+                                        .fill(Color.white)
+                                        .frame(width: 9, height: 9)
+                                        .shadow(color: .black.opacity(0.45), radius: 2)
+                                        .offset(x: max(0, min(currentPos - 4.5, totalWidth - 9)))
+                                        .opacity(isHoveringSlider || isDraggingSlider ? 1 : 0)
+                                }
+                                .frame(height: 12)
+                                .contentShape(Rectangle())
+                                .onHover { hovering in
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        isHoveringSlider = hovering
+                                    }
+                                }
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            mediaManager.isScrubbing = true
+                                            isDraggingSlider = true
+                                            let clampedX = max(0, min(value.location.x, totalWidth))
+                                            let newFraction = Double(clampedX / totalWidth)
+                                            dragSliderTime = newFraction * mediaManager.duration
+                                        }
+                                        .onEnded { value in
+                                            let clampedX = max(0, min(value.location.x, totalWidth))
+                                            let newFraction = Double(clampedX / totalWidth)
+                                            let targetTime = newFraction * mediaManager.duration
+                                            dragSliderTime = targetTime
+                                            mediaManager.seek(to: targetTime)
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                                mediaManager.isScrubbing = false
+                                                isDraggingSlider = false
+                                            }
+                                        }
+                                )
+                            }
+                            .frame(height: 12)
+
+                            Text(MediaManager.formatTime(mediaManager.duration))
+                                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                                .foregroundColor(Color(white: 0.55))
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 7)
+                    }
                 }
+                .frame(width: expandedWidth, height: expandedHeight)
+                .opacity(isExpanded ? 1 : 0)
+                .allowsHitTesting(isExpanded)
+
+                // Compact Notch View
+                HStack(spacing: 0) {
+                    // Leading Artwork / Music Icon
+                    if let artwork = mediaManager.artworkImage {
+                        Image(nsImage: artwork)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 18, height: 18)
+                            .clipShape(RoundedRectangle(cornerRadius: 4.5))
+                            .padding(.leading, 12)
+                    } else if mediaManager.isPlaying {
+                        Image(systemName: "music.note")
+                            .font(.system(size: 11.5, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.85))
+                            .padding(.leading, 13)
+                    }
+
+                    Spacer()
+
+                    // Trailing Animated Audio Spectrum
+                    if mediaManager.isPlaying {
+                        AudioSpectrumView()
+                            .padding(.trailing, 13)
+                    }
+                }
+                .frame(width: collapsedWidth, height: collapsedHeight)
+                .opacity(isExpanded ? 0 : 1)
+                .allowsHitTesting(!isExpanded)
             }
             .frame(width: isExpanded ? expandedWidth : collapsedWidth, height: isExpanded ? expandedHeight : collapsedHeight)
             .background(Color.black)
@@ -219,8 +214,6 @@ struct ContentView: View {
                     topTrailingRadius: 0
                 )
             )
-            // Fluid dynamic spring animation
-            .animation(springAnimation, value: isExpanded)
             .contentShape(Rectangle())
             .onHover { hovering in
                 collapseWorkItem?.cancel()
@@ -236,7 +229,7 @@ struct ContentView: View {
                         }
                     }
                     collapseWorkItem = item
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
                 }
             }
             // Dynamic island depth shadow
