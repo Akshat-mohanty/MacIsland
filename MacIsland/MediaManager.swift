@@ -29,9 +29,11 @@ final class MediaManager: ObservableObject {
         case .spotify:
             return Color(red: 0.22, green: 0.86, blue: 0.45) // Spotify Green
         case .youtube:
-            return Color(red: 240/255.0, green: 179/255.0, blue: 36/255.0) // YouTube #f0b324
-        case .appleMusic, .netflix:
-            return Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) // Apple Music / Netflix Red
+            return Color(red: 255/255.0, green: 51/255.0, blue: 51/255.0) // YouTube Red #FF3333
+        case .appleMusic:
+            return Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) // Apple Music Pink-Red
+        case .netflix:
+            return Color(red: 229/255.0, green: 9/255.0, blue: 20/255.0) // Netflix Red
         case .other:
             return Color(red: 0.22, green: 0.86, blue: 0.45)
         }
@@ -41,6 +43,11 @@ final class MediaManager: ObservableObject {
     private var progressTimer: Timer?
     private var lastArtworkURL: String = ""
     private var seekLockUntil: Date = .distantPast
+    private var consecutiveNotPlayingCount = 0
+    private static let artworkCache = NSCache<NSString, NSImage>()
+    
+    // MARK: - MediaRemote Private Framework Dynamically Loaded Symbols
+    private static let mediaRemoteHandle: UnsafeMutableRawPointer? = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_NOW)
     
     private typealias MRRegisterForNotificationsFunc = @convention(c) (DispatchQueue) -> Void
     private static let mrRegisterForNotifications: MRRegisterForNotificationsFunc? = {
@@ -60,9 +67,56 @@ final class MediaManager: ObservableObject {
         return unsafeBitCast(sym, to: MRGetIsPlayingFunc.self)
     }()
     
+    private typealias MRGetClientFunc = @convention(c) (DispatchQueue, @escaping (AnyObject?) -> Void) -> Void
+    private static let mrGetNowPlayingClient: MRGetClientFunc? = {
+        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRMediaRemoteGetNowPlayingClient") else { return nil }
+        return unsafeBitCast(sym, to: MRGetClientFunc.self)
+    }()
+    
+    private typealias ClientGetStrFunc = @convention(c) (AnyObject) -> CFString?
+    private static let mrClientGetBundleId: ClientGetStrFunc? = {
+        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRNowPlayingClientGetBundleIdentifier") else { return nil }
+        return unsafeBitCast(sym, to: ClientGetStrFunc.self)
+    }()
+    
+    private static let mrClientGetDisplayName: ClientGetStrFunc? = {
+        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRNowPlayingClientGetDisplayName") else { return nil }
+        return unsafeBitCast(sym, to: ClientGetStrFunc.self)
+    }()
+    
+    private typealias ClientGetPIDFunc = @convention(c) (AnyObject) -> pid_t
+    private static let mrClientGetPID: ClientGetPIDFunc? = {
+        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRNowPlayingClientGetProcessIdentifier") else { return nil }
+        return unsafeBitCast(sym, to: ClientGetPIDFunc.self)
+    }()
+
+    private typealias MRSendCommandFunc = @convention(c) (Int32, CFDictionary?) -> Bool
+    private static let mrSendCommand: MRSendCommandFunc? = {
+        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRMediaRemoteSendCommand") else { return nil }
+        return unsafeBitCast(sym, to: MRSendCommandFunc.self)
+    }()
+    
     init() {
         Self.mrRegisterForNotifications?(DispatchQueue.global(qos: .userInitiated))
+        setupNotificationObservers()
         startPolling()
+    }
+    
+    private func setupNotificationObservers() {
+        let notifCenter = NotificationCenter.default
+        let mrNotifications = [
+            "kMRMediaRemoteNowPlayingInfoDidChangeNotification",
+            "kMRMediaRemoteNowPlayingApplicationIsPlayingDidChangeNotification",
+            "kMRMediaRemoteNowPlayingApplicationDidChangeNotification",
+            "kMRNowPlayingPlaybackQueueChangedNotification"
+        ]
+        for notifName in mrNotifications {
+            notifCenter.addObserver(forName: NSNotification.Name(notifName), object: nil, queue: nil) { [weak self] _ in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    self?.fetchNowPlayingInfo()
+                }
+            }
+        }
     }
     
     private func startPolling() {
@@ -74,7 +128,7 @@ final class MediaManager: ObservableObject {
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                if self.isPlaying && !self.isScrubbing && self.duration > 0 && Date() >= self.seekLockUntil {
+                if self.isPlaying && !self.isScrubbing && self.duration > 0 {
                     let nextTime = self.currentTime + 0.1
                     if nextTime <= self.duration {
                         self.currentTime = nextTime
@@ -98,24 +152,129 @@ final class MediaManager: ObservableObject {
     }
 
     func fetchNowPlayingInfo() {
+        // 1. Check MediaRemote asynchronously
+        if let getInfo = Self.mrGetNowPlayingInfo {
+            if let getClient = Self.mrGetNowPlayingClient {
+                getClient(DispatchQueue.global(qos: .userInitiated)) { [weak self] client in
+                    var clientBundleId = ""
+                    var clientDisplayName = ""
+                    var clientPID: pid_t = 0
+                    if let client = client {
+                        clientBundleId = (Self.mrClientGetBundleId?(client) as String?) ?? ""
+                        clientDisplayName = (Self.mrClientGetDisplayName?(client) as String?) ?? ""
+                        clientPID = Self.mrClientGetPID?(client) ?? 0
+                    }
+                    
+                    getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                        guard let self = self else { return }
+                        if let d = dict as? [String: Any],
+                           self.parseMediaRemoteInfo(
+                               d,
+                               clientBundleId: clientBundleId,
+                               clientDisplayName: clientDisplayName,
+                               clientPID: clientPID
+                           ) {
+                            return
+                        }
+                        self.checkFallbacks()
+                    }
+                }
+            } else {
+                getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                    guard let self = self else { return }
+                    if let d = dict as? [String: Any],
+                       self.parseMediaRemoteInfo(
+                           d,
+                           clientBundleId: "",
+                           clientDisplayName: "",
+                           clientPID: 0
+                       ) {
+                        return
+                    }
+                    self.checkFallbacks()
+                }
+            }
+        } else {
+            checkFallbacks()
+        }
+    }
+    
+    private func checkFallbacks() {
         let runningApps = NSWorkspace.shared.runningApplications
         
+        // Native Spotify
         let hasSpotify = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
+        if hasSpotify {
+            let src = """
+            try
+                tell application "Spotify"
+                    set pState to (player state as string)
+                    set trackName to (name of current track as text)
+                    set trackArtist to (artist of current track as text)
+                    set curPos to (player position)
+                    set curDur to (duration of current track) / 1000
+                    return "SpotifyNative|" & trackName & "|" & trackArtist & "|" & pState & "|none|" & curPos & "|" & curDur & "|spotify"
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src), res.contains("|playing|") {
+                executeScriptAndParse(res)
+                return
+            }
+        }
+
+        // Native Apple Music
         let hasMusic = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
-        let hasBrave = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app.")
+        if hasMusic {
+            let src = """
+            try
+                tell application "Music"
+                    set pState to (player state as string)
+                    set trackName to ""
+                    try
+                        set trackName to (name of current track as text)
+                    end try
+                    set trackArtist to ""
+                    try
+                        if (artist of current track) is not missing value then
+                            set trackArtist to (artist of current track as text)
+                        end if
+                    end try
+                    set curPos to 0
+                    try
+                        if (player position) is not missing value then
+                            set curPos to (player position)
+                        end if
+                    end try
+                    set curDur to 0
+                    try
+                        if (duration of current track) is not missing value then
+                            set curDur to (duration of current track)
+                        end if
+                    end try
+                    return "MusicNative|" & trackName & "|" & trackArtist & "|" & pState & "|none|" & curPos & "|" & curDur & "|applemusic"
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src), res.contains("|playing|") {
+                executeScriptAndParse(res)
+                return
+            }
         }
-        let hasChrome = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app.")
-        }
+
+        // Browser scrapers
+        let hasBrave = runningApps.contains { ($0.bundleIdentifier ?? "").contains("brave") }
+        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "").contains("Chrome") }
         let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
-        let hasSafari = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            return id == "com.apple.Safari" || id.hasPrefix("com.apple.Safari.WebApp")
-        }
+        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
         let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.microsoft.edgemac" }
+
+        let chromiumBrowsers = [
+            ("Brave Browser", hasBrave, "Brave"),
+            ("Google Chrome", hasChrome, "Chrome"),
+            ("Arc", hasArc, "Arc"),
+            ("Microsoft Edge", hasEdge, "Edge")
+        ]
 
         let rawScraper = """
         (function() {
@@ -161,15 +320,6 @@ final class MediaManager: ObservableObject {
                 if (inp) {
                     curPos = Math.round(Number(inp.value) / 1000);
                     curDur = Math.round(Number(inp.max) / 1000);
-                } else {
-                    var curTimeEl = document.querySelector('[data-testid="playback-position"]');
-                    var durTimeEl = document.querySelector('[data-testid="playback-duration"]');
-                    if (curTimeEl && durTimeEl) {
-                        var p1 = curTimeEl.innerText.trim().split(':').map(Number);
-                        var p2 = durTimeEl.innerText.trim().split(':').map(Number);
-                        if (p1.length === 2) curPos = p1[0] * 60 + p1[1];
-                        if (p2.length === 2) curDur = p2[0] * 60 + p2[1];
-                    }
                 }
             } else if (url.includes('netflix.com')) {
                 var titleEl = document.querySelector('[data-uia="video-title"], .video-title, [data-uia="watch-video-title"], .ellipsize-js');
@@ -177,73 +327,22 @@ final class MediaManager: ObservableObject {
                 var episodeName = '';
                 if (titleEl) {
                     var h4 = titleEl.querySelector('h4');
-                    var spans = Array.from(titleEl.querySelectorAll('span'))
-                        .map(function(s) { return (s.textContent || s.innerText || '').trim(); })
-                        .filter(Boolean);
+                    var spans = Array.from(titleEl.querySelectorAll('span')).map(function(s) { return (s.textContent || s.innerText || '').trim(); }).filter(Boolean);
                     if (h4) {
                         showName = (h4.textContent || h4.innerText || '').trim();
-                        if (spans.length > 0) {
-                            episodeName = spans.join(' - ');
-                        }
+                        if (spans.length > 0) episodeName = spans.join(' - ');
                     } else if (spans.length > 0) {
                         showName = spans[0];
-                        if (spans.length > 1) {
-                            episodeName = spans.slice(1).join(' - ');
-                        }
+                        if (spans.length > 1) episodeName = spans.slice(1).join(' - ');
                     } else {
                         showName = (titleEl.textContent || titleEl.innerText || '').trim();
                     }
                 }
-
-                if (!showName) {
-                    var ogTitle = document.querySelector('meta[property="og:title"]');
-                    if (ogTitle && ogTitle.content) {
-                        showName = ogTitle.content.trim();
-                    }
-                }
-
-                if (!showName && document.title) {
-                    showName = document.title.trim();
-                }
-
-                showName = showName
-                    .replace(/^Watch\\s+/i, '')
-                    .replace(/\\s*[\\|\\-–—]\\s*Netflix.*$/i, '')
-                    .replace(/^Netflix\\s*[\\|\\-–—]\\s*/i, '')
-                    .trim();
-
-                if (episodeName) {
-                    episodeName = episodeName
-                        .replace(/^Watch\\s+/i, '')
-                        .replace(/\\s*[\\|\\-–—]\\s*Netflix.*$/i, '')
-                        .replace(/^Netflix\\s*[\\|\\-–—]\\s*/i, '')
-                        .trim();
-                }
-
-                if (showName && showName.toLowerCase() !== 'netflix' && !showName.toLowerCase().includes('watch tv shows online')) {
-                    track = showName;
-                    artist = episodeName || 'Netflix';
-                } else if (episodeName) {
-                    track = episodeName;
-                    artist = 'Netflix';
-                } else if (url.includes('/watch/')) {
-                    track = showName || 'Netflix';
-                    artist = 'Netflix';
-                }
-
-                var ogImg = document.querySelector('meta[property="og:image"]');
-                if (ogImg && ogImg.content) {
-                    imgUrl = ogImg.content;
-                } else {
-                    var posterImg = document.querySelector('.previewModal--boxart, .boxart-image, [data-uia="video-canvas"] img, img.title-logo, .billboard-row img');
-                    if (posterImg && posterImg.src) {
-                        imgUrl = posterImg.src;
-                    }
-                }
-
-                if (v) {
-                    isPlaying = (!v.paused && !v.ended) ? 'playing' : 'paused';
-                }
+                if (!showName && document.title) showName = document.title.trim();
+                showName = showName.replace(/^Watch\\s+/i, '').replace(/\\s*[\\|\\-–—]\\s*Netflix.*$/i, '').trim();
+                track = showName || 'Netflix';
+                artist = episodeName || 'Netflix';
+                if (v) isPlaying = (!v.paused && !v.ended) ? 'playing' : 'paused';
             }
 
             if (media && !url.includes('spotify.com')) {
@@ -263,26 +362,13 @@ final class MediaManager: ObservableObject {
                 }
                 if (videoId) {
                     imgUrl = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg';
-                } else {
-                    var metaImg = document.querySelector('link[rel="image_src"], meta[property="og:image"]');
-                    imgUrl = metaImg ? (metaImg.href || metaImg.content) : '';
                 }
             }
 
-            var service = "other";
-            if (url.includes('youtube.com') || url.includes('youtu.be') || url.includes('music.youtube.com')) {
-                service = 'youtube';
-            } else if (url.includes('spotify.com')) {
-                service = 'spotify';
-            } else if (url.includes('netflix.com')) {
-                service = 'netflix';
-            }
-
-            if (!track && url.includes('netflix.com')) {
-                track = document.title ? document.title.replace(/^Watch\\s+/i, '').replace(/\\s*[\\|\\-–—]\\s*Netflix.*$/i, '').trim() : 'Netflix';
-                if (!track || track.toLowerCase() === 'netflix') track = 'Netflix';
-                artist = 'Netflix';
-            }
+            var service = 'other';
+            if (url.includes('youtube.com') || url.includes('youtu.be') || url.includes('music.youtube.com')) service = 'youtube';
+            else if (url.includes('spotify.com')) service = 'spotify';
+            else if (url.includes('netflix.com')) service = 'netflix';
 
             if (track) {
                 return track.trim() + '|' + artist.trim() + '|' + isPlaying + '|' + (imgUrl || 'none') + '|' + Math.round(curPos) + '|' + Math.round(curDur) + '|' + service;
@@ -295,73 +381,6 @@ final class MediaManager: ObservableObject {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
 
-        let chromiumBrowsers = [
-            ("Brave Browser", hasBrave, "Brave"),
-            ("Google Chrome", hasChrome, "Chrome"),
-            ("Arc", hasArc, "Arc"),
-            ("Microsoft Edge", hasEdge, "Edge")
-        ]
-
-        // 1. Actively playing native apps
-        if hasSpotify {
-            let src = """
-            try
-                tell application "Spotify"
-                    if player state is playing then
-                        set trackName to (name of current track as text)
-                        set trackArtist to (artist of current track as text)
-                        set curPos to (player position)
-                        set curDur to (duration of current track) / 1000
-                        return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|spotify"
-                    end if
-                end tell
-            end try
-            """
-            if let res = runIsolatedAppleScript(src) {
-                executeScriptAndParse(res)
-                return
-            }
-        }
-
-        if hasMusic {
-            let src = """
-            try
-                tell application "Music"
-                    if (player state as string) is "playing" then
-                        set trackName to ""
-                        try
-                            set trackName to (name of current track as text)
-                        end try
-                        set trackArtist to ""
-                        try
-                            if (artist of current track) is not missing value then
-                                set trackArtist to (artist of current track as text)
-                            end if
-                        end try
-                        set curPos to 0
-                        try
-                            if (player position) is not missing value then
-                                set curPos to (player position)
-                            end if
-                        end try
-                        set curDur to 0
-                        try
-                            if (duration of current track) is not missing value then
-                                set curDur to (duration of current track)
-                            end if
-                        end try
-                        return "MusicNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|applemusic"
-                    end if
-                end tell
-            end try
-            """
-            if let res = runIsolatedAppleScript(src) {
-                executeScriptAndParse(res)
-                return
-            }
-        }
-
-        // 2. Actively playing browser tabs (only for currently running browsers)
         for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
             let src = """
             set webScraper to "\(escapedScraper)"
@@ -377,12 +396,6 @@ final class MediaManager: ObservableObject {
                                         return "\(tag)|" & res
                                     end if
                                 on error
-                                    if tabURL contains "netflix.com" then
-                                        set tTitle to title of t
-                                        if tTitle is not missing value and tTitle is not "" then
-                                            return "\(tag)|" & tTitle & "|Netflix|playing|none|0|0|netflix"
-                                        end if
-                                    end if
                                 end try
                             end if
                         end repeat
@@ -411,12 +424,6 @@ final class MediaManager: ObservableObject {
                                         return "Safari|" & res
                                     end if
                                 on error
-                                    if tabURL contains "netflix.com" then
-                                        set tTitle to name of t
-                                        if tTitle is not missing value and tTitle is not "" then
-                                            return "Safari|" & tTitle & "|Netflix|playing|none|0|0|netflix"
-                                        end if
-                                    end if
                                 end try
                             end if
                         end repeat
@@ -428,250 +435,96 @@ final class MediaManager: ObservableObject {
                 executeScriptAndParse(res)
                 return
             }
-        }
-
-        // 3. Actively playing MediaRemote (covers installed Netflix Safari Web App, QuickTime, Podcasts, etc.)
-        let hasNetflixWebApp = runningApps.contains {
-            let id = $0.bundleIdentifier ?? ""
-            let name = $0.localizedName ?? ""
-            return id.contains("Safari.WebApp") || name.localizedCaseInsensitiveContains("netflix") || id.localizedCaseInsensitiveContains("netflix")
-        }
-
-        if let getInfo = Self.mrGetNowPlayingInfo {
-            let sema = DispatchSemaphore(value: 0)
-            var mediaRemoteActive = false
-            
-            getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
-                if let d = dict as? [String: Any], let self = self {
-                    let rate = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
-                    let title = (d["kMRMediaRemoteNowPlayingInfoTitle"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    
-                    if rate > 0 && !title.isEmpty {
-                        mediaRemoteActive = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: true)
-                    }
-                }
-                sema.signal()
-            }
-            
-            _ = sema.wait(timeout: .now() + 0.2)
-            if mediaRemoteActive {
-                return
-            }
-        }
-
-        // 4. Paused browser tabs (only for currently running browsers)
-        for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
-            let src = """
-            set webScraper to "\(escapedScraper)"
-            try
-                tell application "\(appName)"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                try
-                                    set res to execute t javascript webScraper
-                                    if res is not missing value and res is not "null" then
-                                        return "\(tag)|" & res
-                                    end if
-                                on error
-                                    if tabURL contains "netflix.com" then
-                                        set tTitle to title of t
-                                        if tTitle is not missing value and tTitle is not "" then
-                                            return "\(tag)|" & tTitle & "|Netflix|paused|none|0|0|netflix"
-                                        end if
-                                    end if
-                                end try
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end try
-            """
-            if let res = runIsolatedAppleScript(src) {
-                executeScriptAndParse(res)
-                return
-            }
-        }
-
-        if hasSafari {
-            let src = """
-            set webScraper to "\(escapedScraper)"
-            try
-                tell application "Safari"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                try
-                                    set res to do JavaScript webScraper in t
-                                    if res is not missing value and res is not "null" then
-                                        return "Safari|" & res
-                                    end if
-                                on error
-                                    if tabURL contains "netflix.com" then
-                                        set tTitle to name of t
-                                        if tTitle is not missing value and tTitle is not "" then
-                                            return "Safari|" & tTitle & "|Netflix|paused|none|0|0|netflix"
-                                        end if
-                                    end if
-                                end try
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end try
-            """
-            if let res = runIsolatedAppleScript(src) {
-                executeScriptAndParse(res)
-                return
-            }
-        }
-
-        // 5. Paused native apps
-        if hasSpotify {
-            let src = """
-            try
-                tell application "Spotify"
-                    set trackName to (name of current track as text)
-                    set trackArtist to (artist of current track as text)
-                    set curPos to (player position)
-                    set curDur to (duration of current track) / 1000
-                    return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|spotify"
-                end tell
-            end try
-            """
-            if let res = runIsolatedAppleScript(src) {
-                executeScriptAndParse(res)
-                return
-            }
-        }
-
-        if hasMusic {
-            let src = """
-            try
-                tell application "Music"
-                    set trackName to ""
-                    try
-                        set trackName to (name of current track as text)
-                    end try
-                    set trackArtist to ""
-                    try
-                        if (artist of current track) is not missing value then
-                            set trackArtist to (artist of current track as text)
-                        end if
-                    end try
-                    set curPos to 0
-                    try
-                        if (player position) is not missing value then
-                            set curPos to (player position)
-                        end if
-                    end try
-                    set curDur to 0
-                    try
-                        if (duration of current track) is not missing value then
-                            set curDur to (duration of current track)
-                        end if
-                    end try
-                    return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|applemusic"
-                end tell
-            end try
-            """
-            if let res = runIsolatedAppleScript(src) {
-                executeScriptAndParse(res)
-                return
-            }
-        }
-
-        // 6. Paused MediaRemote (if any)
-        if let getInfo = Self.mrGetNowPlayingInfo {
-            let sema = DispatchSemaphore(value: 0)
-            var mediaRemoteHandled = false
-            getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
-                if let d = dict as? [String: Any], let self = self {
-                    mediaRemoteHandled = self.parseMediaRemoteInfo(d, isExplicitlyPlaying: false)
-                }
-                sema.signal()
-            }
-            _ = sema.wait(timeout: .now() + 0.15)
-            if mediaRemoteHandled {
-                return
-            }
-        }
-
-        if hasNetflixWebApp {
-            Task { @MainActor in
-                self.consecutiveNotPlayingCount = 0
-                self.currentSource = "NetflixSafariWebApp"
-                self.title = "Netflix"
-                self.artist = "Netflix"
-                self.isPlaying = false
-                self.isYouTube = false
-                self.isNetflix = true
-                self.mediaService = .netflix
-                self.loadAppIcon(for: "NetflixSafariWebApp")
-            }
-            return
         }
 
         setNotPlaying()
     }
     
-    private static let artworkCache = NSCache<NSString, NSImage>()
-    private var consecutiveNotPlayingCount = 0
-    
-    private func parseMediaRemoteInfo(_ d: [String: Any], isExplicitlyPlaying: Bool? = nil) -> Bool {
+    // MARK: - MediaRemote Parsing
+    private func parseMediaRemoteInfo(
+        _ d: [String: Any],
+        clientBundleId: String,
+        clientDisplayName: String,
+        clientPID: pid_t
+    ) -> Bool {
         let rawTitle = (d["kMRMediaRemoteNowPlayingInfoTitle"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawTitle.isEmpty else { return false }
         
         let rateVal = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
-        let isPlayingBool = isExplicitlyPlaying ?? (rateVal > 0)
+        let isPlayingBool = rateVal > 0
         let duration = (d["kMRMediaRemoteNowPlayingInfoDuration"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoDuration"] as? Double ?? 0)
         let elapsed = (d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0)
         let timestamp = d["kMRMediaRemoteNowPlayingInfoTimestamp"] as? Date ?? Date()
         let rawArtist = (d["kMRMediaRemoteNowPlayingInfoArtist"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let rawAlbum = (d["kMRMediaRemoteNowPlayingInfoAlbum"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         
+        var runningApp: NSRunningApplication?
+        if clientPID > 0 {
+            runningApp = NSRunningApplication(processIdentifier: clientPID)
+        }
+        let appName = runningApp?.localizedName ?? clientDisplayName
+        let fullBundleId = runningApp?.bundleIdentifier ?? clientBundleId
+        
         var title = rawTitle
         var artist = rawArtist
         var service: MediaService = .other
         
-        let runningApps = NSWorkspace.shared.runningApplications
-        let hasNetflixRunning = runningApps.contains(where: {
-            ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("netflix") ||
-            ($0.localizedName ?? "").localizedCaseInsensitiveContains("netflix") ||
-            ($0.bundleIdentifier ?? "").contains("Safari.WebApp")
-        })
+        // Comprehensive service identification
+        let isYouTube = clientDisplayName.localizedCaseInsensitiveContains("YouTube") ||
+                        appName.localizedCaseInsensitiveContains("YouTube") ||
+                        fullBundleId.localizedCaseInsensitiveContains("youtube") ||
+                        title.localizedCaseInsensitiveContains("YouTube") ||
+                        artist.localizedCaseInsensitiveContains("YouTube") ||
+                        rawAlbum.localizedCaseInsensitiveContains("YouTube")
         
-        let isNetflix = title.localizedCaseInsensitiveContains("Netflix") ||
+        let isNetflix = clientDisplayName.localizedCaseInsensitiveContains("Netflix") ||
+                        appName.localizedCaseInsensitiveContains("Netflix") ||
+                        fullBundleId.localizedCaseInsensitiveContains("netflix") ||
+                        title.localizedCaseInsensitiveContains("Netflix") ||
                         artist.localizedCaseInsensitiveContains("Netflix") ||
-                        rawAlbum.localizedCaseInsensitiveContains("Netflix") ||
-                        hasNetflixRunning
+                        rawAlbum.localizedCaseInsensitiveContains("Netflix")
         
-        if isNetflix {
+        let isSpotify = clientDisplayName.localizedCaseInsensitiveContains("Spotify") ||
+                        appName.localizedCaseInsensitiveContains("Spotify") ||
+                        fullBundleId.localizedCaseInsensitiveContains("spotify") ||
+                        title.localizedCaseInsensitiveContains("Spotify") ||
+                        artist.localizedCaseInsensitiveContains("Spotify")
+        
+        let isAppleMusic = clientDisplayName.localizedCaseInsensitiveContains("Music") ||
+                           appName == "Music" ||
+                           fullBundleId == "com.apple.Music"
+        
+        if isYouTube {
+            service = .youtube
+            title = title
+                .replacingOccurrences(of: " - YouTube", with: "", options: .caseInsensitive)
+                .replacingOccurrences(of: " - YouTube Music", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if artist.isEmpty || artist == appName {
+                artist = rawAlbum.isEmpty ? "YouTube" : rawAlbum
+            }
+        } else if isNetflix {
             service = .netflix
             title = title
                 .replacingOccurrences(of: " - Netflix", with: "", options: .caseInsensitive)
                 .replacingOccurrences(of: " | Netflix", with: "", options: .caseInsensitive)
                 .replacingOccurrences(of: "Watch ", with: "", options: .caseInsensitive)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            
             if title.isEmpty || title.lowercased() == "home" || title.lowercased() == "browse" {
                 title = "Netflix"
             }
             if artist.isEmpty {
                 artist = rawAlbum.isEmpty ? "Netflix" : rawAlbum
             }
-        } else if title.localizedCaseInsensitiveContains("YouTube") || artist.localizedCaseInsensitiveContains("YouTube") {
-            service = .youtube
-        } else if title.localizedCaseInsensitiveContains("Spotify") || artist.localizedCaseInsensitiveContains("Spotify") {
+        } else if isSpotify {
             service = .spotify
-        } else if title.localizedCaseInsensitiveContains("Apple Music") || artist.localizedCaseInsensitiveContains("Apple Music") {
+        } else if isAppleMusic {
             service = .appleMusic
-        } else if !isPlayingBool && duration == 0 {
-            return false
+        } else {
+            service = .other
         }
         
+        // Artwork extraction
         var artwork: NSImage? = nil
         if let artData = d["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data, let img = NSImage(data: artData) {
             artwork = img
@@ -681,23 +534,29 @@ final class MediaManager: ObservableObject {
         let calculatedPos = max(0, isPlayingBool ? (elapsed + timeSince * (rateVal > 0 ? rateVal : 1.0)) : elapsed)
         let currentPos = duration > 0 ? min(calculatedPos, duration) : calculatedPos
         
+        let finalTitle = title
+        let finalArtist = artist
+        let finalService = service
+        let finalArtwork = artwork
+        let finalAppName = appName
+        
         Task { @MainActor in
             self.consecutiveNotPlayingCount = 0
-            self.currentSource = service == .netflix ? "NetflixApp" : "MediaRemote"
-            self.title = title
-            self.artist = artist
+            self.currentSource = finalAppName.isEmpty ? "MediaRemote" : finalAppName
+            self.title = finalTitle
+            self.artist = finalArtist
             self.isPlaying = isPlayingBool
-            self.isYouTube = service == .youtube
-            self.isNetflix = service == .netflix
-            self.mediaService = service
+            self.isYouTube = finalService == .youtube
+            self.isNetflix = finalService == .netflix
+            self.mediaService = finalService
             if !self.isScrubbing && Date() >= self.seekLockUntil {
                 self.currentTime = currentPos
             }
             self.duration = duration
-            if let artwork = artwork {
+            if let artwork = finalArtwork {
                 self.artworkImage = artwork
             } else {
-                self.loadAppIcon(for: self.currentSource)
+                self.loadAppIcon(for: self.currentSource, bundleId: fullBundleId)
             }
         }
         return true
@@ -775,35 +634,12 @@ final class MediaManager: ObservableObject {
                     self.loadAppIcon(for: sourceApp)
                 }
             }
-
-            if sourceApp == "MusicNative" || (sourceApp == "SpotifyNative" && newCurPos == 0) {
-                if let getInfo = Self.mrGetNowPlayingInfo {
-                    getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
-                        guard let self = self, let d = dict as? [String: Any] else { return }
-                        let elapsed = d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0
-                        let rate = d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? (newIsPlaying ? 1.0 : 0.0)
-                        let timestamp = d["kMRMediaRemoteNowPlayingInfoTimestamp"] as? Date ?? Date()
-                        let timeSince = Date().timeIntervalSince(timestamp)
-                        let calculatedPos = max(0, rate > 0 ? (elapsed + timeSince * rate) : elapsed)
-                        
-                        Task { @MainActor in
-                            if !self.isScrubbing && Date() >= self.seekLockUntil {
-                                if self.duration > 0 {
-                                    self.currentTime = min(calculatedPos, self.duration)
-                                } else {
-                                    self.currentTime = calculatedPos
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         } else {
             setNotPlaying()
         }
     }
     
-    private func loadAppIcon(for sourceApp: String) {
+    private func loadAppIcon(for sourceApp: String, bundleId: String? = nil) {
         if mediaService == .netflix || sourceApp.localizedCaseInsensitiveContains("Netflix") {
             let runningApps = NSWorkspace.shared.runningApplications
             if let netflixApp = runningApps.first(where: {
@@ -815,36 +651,32 @@ final class MediaManager: ObservableObject {
                 self.artworkImage = img
                 return
             }
-            
-            let possibleAppPaths = [
-                "/Users/\(NSUserName())/Applications/Netflix.app",
-                "/Users/\(NSUserName())/Applications/Chrome Apps.localized/Netflix.app",
-                "/Applications/Netflix.app"
-            ]
-            for path in possibleAppPaths {
-                if FileManager.default.fileExists(atPath: path) {
-                    let img = NSWorkspace.shared.icon(forFile: path)
-                    Self.artworkCache.setObject(img, forKey: "netflixAppIcon" as NSString)
-                    self.artworkImage = img
-                    return
-                }
-            }
         }
 
-        let bundleId: String
-        if sourceApp == "SpotifyNative" { bundleId = "com.spotify.client" }
-        else if sourceApp == "MusicNative" { bundleId = "com.apple.Music" }
-        else if sourceApp == "Brave" { bundleId = "com.brave.Browser" }
-        else if sourceApp == "Chrome" { bundleId = "com.google.Chrome" }
-        else if sourceApp == "Arc" { bundleId = "company.thebrowser.Browser" }
-        else if sourceApp == "Edge" { bundleId = "com.microsoft.edgemac" }
-        else { bundleId = "com.apple.Safari" }
+        let resolvedBundleId: String
+        if let bid = bundleId, !bid.isEmpty {
+            resolvedBundleId = bid
+        } else if sourceApp == "SpotifyNative" || sourceApp == "Spotify" {
+            resolvedBundleId = "com.spotify.client"
+        } else if sourceApp == "MusicNative" || sourceApp == "Music" {
+            resolvedBundleId = "com.apple.Music"
+        } else if sourceApp == "Brave" || sourceApp.contains("Brave") {
+            resolvedBundleId = "com.brave.Browser"
+        } else if sourceApp == "Chrome" || sourceApp.contains("Chrome") {
+            resolvedBundleId = "com.google.Chrome"
+        } else if sourceApp == "Arc" {
+            resolvedBundleId = "company.thebrowser.Browser"
+        } else if sourceApp == "Edge" || sourceApp.contains("Edge") {
+            resolvedBundleId = "com.microsoft.edgemac"
+        } else {
+            resolvedBundleId = "com.apple.Safari"
+        }
         
-        if let cached = Self.artworkCache.object(forKey: bundleId as NSString) {
+        if let cached = Self.artworkCache.object(forKey: resolvedBundleId as NSString) {
             self.artworkImage = cached
-        } else if let appUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+        } else if let appUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: resolvedBundleId) {
             let img = NSWorkspace.shared.icon(forFile: appUrl.path)
-            Self.artworkCache.setObject(img, forKey: bundleId as NSString)
+            Self.artworkCache.setObject(img, forKey: resolvedBundleId as NSString)
             self.artworkImage = img
         }
     }
@@ -868,6 +700,7 @@ final class MediaManager: ObservableObject {
         }
     }
     
+    // MARK: - Playback Controls
     func togglePlayPause() {
         Task { @MainActor in
             self.isPlaying.toggle()
@@ -883,125 +716,149 @@ final class MediaManager: ObservableObject {
         runControlCommand("previous track")
     }
     
-    private typealias MRSendCommandFunc = @convention(c) (Int32, CFDictionary?) -> Bool
-    private static let mediaRemoteHandle: UnsafeMutableRawPointer? = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_NOW)
-    private static let mrSendCommand: MRSendCommandFunc? = {
-        guard let handle = mediaRemoteHandle, let sym = dlsym(handle, "MRMediaRemoteSendCommand") else { return nil }
-        return unsafeBitCast(sym, to: MRSendCommandFunc.self)
-    }()
-    
     func seek(to seconds: Double) {
-        self.currentTime = seconds
-        self.seekLockUntil = Date().addingTimeInterval(1.2)
-        let source = self.currentSource
-        let runningApps = NSWorkspace.shared.runningApplications
+        let clampedSeconds = max(0, duration > 0 ? min(seconds, duration) : seconds)
+        Task { @MainActor in
+            self.currentTime = clampedSeconds
+            self.seekLockUntil = Date().addingTimeInterval(1.5)
+        }
         
-        let hasBrave = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.brave.Browser" }
-        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
-        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
-        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.microsoft.edgemac" }
-        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
-
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var scriptSource = ""
-
-            if source == "SpotifyNative" {
-                scriptSource = """
-                try
-                    tell application "Spotify"
-                        set player position to \(seconds)
-                    end tell
-                end try
-                """
-            } else if source == "MusicNative" {
-                scriptSource = """
-                try
-                    tell application "Music"
-                        if player state is not stopped then
-                            set player position to \(seconds)
-                        end if
-                    end tell
-                end try
-                """
-            } else if source == "NetflixApp" || source == "MediaRemote" {
-                if let sendCmd = Self.mrSendCommand {
-                    let dict: [String: Any] = ["kMRMediaRemoteOptionPlaybackPosition": seconds]
-                    _ = sendCmd(11, dict as CFDictionary)
-                }
-            } else {
-                let jsSeek = """
-                (function() {
-                    var targetSec = \(seconds);
-                    var inp = document.querySelector('[data-testid="playback-progressbar"] input');
-                    if (inp) {
-                        var targetMs = targetSec * 1000;
-                        var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                        nativeSetter.call(inp, targetMs);
-                        inp.dispatchEvent(new Event('input', { bubbles: true }));
-                        inp.dispatchEvent(new Event('change', { bubbles: true }));
-                    }
-                    var v = Array.from(document.querySelectorAll('video, audio')).find(function(x){return !x.paused;}) || document.querySelector('.html5-main-video') || document.querySelector('video, audio');
-                    if (v) {
-                        try { v.currentTime = targetSec; } catch(e) {}
-                    }
-                })();
-                """
-                
-                let escapedJsSeek = jsSeek
-                    .replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-                
-                let browsers = [
-                    ("Brave Browser", hasBrave),
-                    ("Google Chrome", hasChrome),
-                    ("Arc", hasArc),
-                    ("Microsoft Edge", hasEdge)
+            guard let self = self else { return }
+            
+            // Universal MediaRemote seek (code 18: MRMediaRemoteCommandChangePlaybackPosition)
+            if let sendCmd = Self.mrSendCommand {
+                let dict: [String: Any] = [
+                    "kMRMediaRemoteOptionPlaybackPosition": NSNumber(value: clampedSeconds)
                 ]
-                
-                for (b, isRunning) in browsers where isRunning {
-                    scriptSource += """
-                    try
-                        tell application "\(b)"
-                            repeat with win in every window
-                                repeat with t in every tab of win
-                                    set tabURL to URL of t
-                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                        tell t to execute javascript "\(escapedJsSeek)"
-                                    end if
-                                end repeat
-                            end repeat
-                        end tell
-                    end try
-                    
-                    """
-                }
-                
-                if hasSafari {
-                    scriptSource += """
-                    try
-                        tell application "Safari"
-                            repeat with win in every window
-                                repeat with t in every tab of win
-                                    set tabURL to URL of t
-                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                        do JavaScript "\(escapedJsSeek)" in t
-                                    end if
-                                end repeat
-                            end repeat
-                        end tell
-                    end try
-                    
-                    """
-                }
-            }
-
-            if !scriptSource.isEmpty, let script = NSAppleScript(source: scriptSource) {
-                script.executeAndReturnError(nil)
+                _ = sendCmd(18, dict as CFDictionary)
+                _ = sendCmd(11, dict as CFDictionary)
             }
             
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.3) {
+            let source = self.currentSource
+            if source == "SpotifyNative" || source == "Spotify" {
+                _ = NSAppleScript(source: "tell application \"Spotify\" to set player position to \(clampedSeconds)")?.executeAndReturnError(nil)
+            } else if source == "MusicNative" || source == "Music" {
+                _ = NSAppleScript(source: "tell application \"Music\" to set player position to \(clampedSeconds)")?.executeAndReturnError(nil)
+            }
+            
+            // Web browsers seek (YouTube, YouTube Music, Netflix, Spotify Web, HTML5 Video/Audio)
+            self.seekInWebBrowsers(to: clampedSeconds)
+            
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.fetchNowPlayingInfo()
             }
+        }
+    }
+    
+    private func seekInWebBrowsers(to seconds: Double) {
+        let jsSeek = """
+        (function() {
+            var targetSec = \(seconds);
+            try {
+                var yt = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+                if (yt && typeof yt.seekTo === 'function') {
+                    yt.seekTo(targetSec, true);
+                }
+            } catch(e) {}
+            try {
+                if (window.location.href.indexOf('netflix.com') !== -1 && window.netflix && window.netflix.appContext) {
+                    var vp = window.netflix.appContext.state.playerApp.getAPI().videoPlayer;
+                    if (vp) {
+                        var sessionIds = vp.getAllPlayerSessionIds();
+                        if (sessionIds && sessionIds.length > 0) {
+                            var p = vp.getVideoPlayerBySessionId(sessionIds[sessionIds.length - 1]);
+                            if (p && typeof p.seek === 'function') {
+                                p.seek(targetSec * 1000);
+                            }
+                        }
+                    }
+                }
+            } catch(e) {}
+            try {
+                if (window.location.href.indexOf('spotify.com') !== -1) {
+                    var pb = document.querySelector('[data-testid="playback-progressbar"] input');
+                    if (pb) {
+                        var maxVal = Number(pb.max) || 1;
+                        pb.value = Math.min(Math.max(0, targetSec * 1000), maxVal);
+                        pb.dispatchEvent(new Event('input', { bubbles: true }));
+                        pb.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                }
+            } catch(e) {}
+            try {
+                var mediaList = Array.from(document.querySelectorAll('video, audio'));
+                var active = mediaList.find(function(m) { return !m.paused && !m.ended; }) || document.querySelector('.html5-main-video') || mediaList[0];
+                if (active) {
+                    active.currentTime = targetSec;
+                }
+                for (var i = 0; i < mediaList.length; i++) {
+                    if (mediaList[i] !== active && !mediaList[i].paused) {
+                        mediaList[i].currentTime = targetSec;
+                    }
+                }
+            } catch(e) {}
+        })();
+        """
+        
+        let escapedJsSeek = jsSeek
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        
+        let runningApps = NSWorkspace.shared.runningApplications
+        let chromiumBrowsers: [(name: String, bundleSubstring: String)] = [
+            ("Brave Browser", "brave"),
+            ("Google Chrome", "Chrome"),
+            ("Arc", "company.thebrowser.Browser"),
+            ("Microsoft Edge", "edgemac"),
+            ("Opera", "Opera"),
+            ("Vivaldi", "Vivaldi")
+        ]
+        
+        for (appName, bundleSubstring) in chromiumBrowsers {
+            let isRunning = runningApps.contains { app in
+                let bid = app.bundleIdentifier ?? ""
+                let name = app.localizedName ?? ""
+                return bid.localizedCaseInsensitiveContains(bundleSubstring) || name.localizedCaseInsensitiveContains(appName)
+            }
+            if isRunning {
+                let script = """
+                tell application "\(appName)"
+                    repeat with win in every window
+                        repeat with t in every tab of win
+                            set tabURL to URL of t
+                            if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "soundcloud.com" or tabURL contains "twitch.tv" or tabURL contains "vimeo.com") then
+                                try
+                                    execute t javascript "\(escapedJsSeek)"
+                                on error
+                                end try
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+                """
+                _ = NSAppleScript(source: script)?.executeAndReturnError(nil)
+            }
+        }
+        
+        let isSafariRunning = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("Safari") }
+        if isSafariRunning {
+            let script = """
+            tell application "Safari"
+                repeat with win in every window
+                    repeat with t in every tab of win
+                        set tabURL to URL of t
+                        if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "soundcloud.com" or tabURL contains "twitch.tv" or tabURL contains "vimeo.com") then
+                            try
+                                do JavaScript "\(escapedJsSeek)" in t
+                            on error
+                            end try
+                        end if
+                    end repeat
+                end repeat
+            end tell
+            """
+            _ = NSAppleScript(source: script)?.executeAndReturnError(nil)
         }
     }
     
@@ -1020,156 +877,31 @@ final class MediaManager: ObservableObject {
     
     private func runControlCommand(_ command: String) {
         let source = self.currentSource
-        let runningApps = NSWorkspace.shared.runningApplications
         
-        let hasBrave = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.brave.Browser" }
-        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" }
-        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
-        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.microsoft.edgemac" }
-        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
-
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var scriptSource = ""
-
+            // Universal MediaRemote control
+            let cmdCode: Int32
+            if command == "playpause" { cmdCode = 2 }
+            else if command == "next track" { cmdCode = 4 }
+            else if command == "previous track" { cmdCode = 5 }
+            else { cmdCode = 2 }
+            _ = Self.mrSendCommand?(cmdCode, nil)
+            
             if source == "SpotifyNative" {
-                scriptSource = """
-                try
-                    tell application "Spotify" to \(command)
-                end try
-                """
+                _ = NSAppleScript(source: "tell application \"Spotify\" to \(command)")?.executeAndReturnError(nil)
             } else if source == "MusicNative" {
-                scriptSource = """
-                try
-                    tell application "Music" to \(command)
-                end try
-                """
-            } else if source == "NetflixSafariWebApp" || source == "NetflixApp" || source == "MediaRemote" {
-                let cmdCode: Int32
-                if command == "playpause" { cmdCode = 2 }
-                else if command == "next track" { cmdCode = 4 }
-                else if command == "previous track" { cmdCode = 5 }
-                else { cmdCode = 2 }
-                _ = Self.mrSendCommand?(cmdCode, nil)
-                
-                let keyCode: Int
-                if command == "playpause" { keyCode = 49 }
-                else if command == "next track" { keyCode = 124 }
-                else { keyCode = 123 }
-                
-                let keyScript = """
-                try
-                    tell application "System Events"
-                        tell (first process whose name is "Web App" or bundle identifier contains "Safari.WebApp" or name is "Netflix")
-                            key code \(keyCode)
-                        end tell
-                    end tell
-                end try
-                """
-                _ = NSAppleScript(source: keyScript)?.executeAndReturnError(nil)
-            } else {
-                let jsCmd = """
-                (function() {
-                    var cmd = '\(command)';
-                    if (cmd === 'playpause') {
-                        var nfPlayBtn = document.querySelector('[data-uia="control-play-pause-play"], [data-uia="control-play-pause-pause"], [data-uia="control-play-pause"], .button-nfVideosPlay, .button-nfVideosPause');
-                        var ytPlayBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, [data-testid="control-button-playpause"]');
-                        if (nfPlayBtn) {
-                            nfPlayBtn.click();
-                        } else if (ytPlayBtn) {
-                            ytPlayBtn.click();
-                        } else {
-                            var videos = Array.from(document.querySelectorAll('video'));
-                            var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
-                            if (v) {
-                                if (v.paused) v.play(); else v.pause();
-                            }
-                        }
-                    } else if (cmd === 'next track') {
-                        var nfForwardBtn = document.querySelector('[data-uia="control-fast-forward"], [data-uia="control-seek-forward"], [data-uia="control-skip-forward"], .button-nfVideosFastForward');
-                        var nextBtn = document.querySelector('.ytp-next-button, .next-button.ytmusic-player-bar, [data-testid="control-button-skip-forward"]');
-                        if (nfForwardBtn) {
-                            nfForwardBtn.click();
-                        } else {
-                            var videos = Array.from(document.querySelectorAll('video'));
-                            var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
-                            if (v && isFinite(v.duration)) {
-                                v.currentTime = Math.min(v.duration, v.currentTime + 10);
-                            } else if (nextBtn) {
-                                nextBtn.click();
-                            }
-                        }
-                    } else if (cmd === 'previous track') {
-                        var nfRewindBtn = document.querySelector('[data-uia="control-seek-back"], [data-uia="control-fast-rewind"], [data-uia="control-skip-back"], .button-nfVideosRewind');
-                        var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, [data-testid="control-button-skip-back"]');
-                        if (nfRewindBtn) {
-                            nfRewindBtn.click();
-                        } else {
-                            var videos = Array.from(document.querySelectorAll('video'));
-                            var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
-                            if (v) {
-                                if (v.currentTime > 3) {
-                                    v.currentTime = 0;
-                                } else {
-                                    v.currentTime = Math.max(0, v.currentTime - 10);
-                                }
-                            } else if (prevBtn) {
-                                prevBtn.click();
-                            }
-                        }
+                _ = NSAppleScript(source: "tell application \"Music\" to \(command)")?.executeAndReturnError(nil)
+            } else if self?.isYouTube == true && command != "playpause" {
+                // If skipping video on YouTube, seek forward/back 10 seconds if track skip did not change track
+                if command == "next track", let cur = self?.currentTime, let dur = self?.duration, dur > 0 {
+                    self?.seek(to: min(dur, cur + 10))
+                } else if command == "previous track", let cur = self?.currentTime {
+                    if cur > 3 {
+                        self?.seek(to: 0)
+                    } else {
+                        self?.seek(to: max(0, cur - 10))
                     }
-                })();
-                """
-                
-                let escapedJsCmd = jsCmd
-                    .replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-                
-                let browsers = [
-                    ("Brave Browser", hasBrave),
-                    ("Google Chrome", hasChrome),
-                    ("Arc", hasArc),
-                    ("Microsoft Edge", hasEdge)
-                ]
-                
-                for (b, isRunning) in browsers where isRunning {
-                    scriptSource += """
-                    try
-                        tell application "\(b)"
-                            repeat with win in every window
-                                repeat with t in every tab of win
-                                    set tabURL to URL of t
-                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                        tell t to execute javascript "\(escapedJsCmd)"
-                                    end if
-                                end repeat
-                            end repeat
-                        end tell
-                    end try
-                    
-                    """
                 }
-                
-                if hasSafari {
-                    scriptSource += """
-                    try
-                        tell application "Safari"
-                            repeat with win in every window
-                                repeat with t in every tab of win
-                                    set tabURL to URL of t
-                                    if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                        do JavaScript "\(escapedJsCmd)" in t
-                                    end if
-                                end repeat
-                            end repeat
-                        end tell
-                    end try
-                    
-                    """
-                }
-            }
-
-            if !scriptSource.isEmpty, let script = NSAppleScript(source: scriptSource) {
-                script.executeAndReturnError(nil)
             }
             
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.3) {

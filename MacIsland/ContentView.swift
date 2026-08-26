@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var isExpanded = false
     @State private var window: NSWindow?
     @StateObject private var mediaManager = MediaManager()
+    @State private var isHoveringIsland = false
     @State private var isHoveringSlider = false
     @State private var isDraggingSlider = false
     @State private var dragSliderTime: Double = 0
@@ -36,18 +37,17 @@ struct ContentView: View {
                         if let artwork = mediaManager.artworkImage {
                             Image(nsImage: artwork)
                                 .resizable()
-                                .aspectRatio(contentMode: mediaManager.isYouTube ? .fit : .fill)
-                                .frame(width: mediaManager.isYouTube ? 36 : 42, height: mediaManager.isYouTube ? 36 : 42)
-                                .clipShape(RoundedRectangle(cornerRadius: mediaManager.isYouTube ? 5 : 8))
-                                .shadow(color: .white.opacity(0.12), radius: 3)
+                                .aspectRatio(contentMode: .fill)
                                 .frame(width: 42, height: 42)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .shadow(color: .white.opacity(0.12), radius: 3)
                         } else {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 8)
                                     .fill(Color(white: 0.15))
-                                Image(systemName: mediaManager.mediaService == .netflix ? "tv.fill" : "music.note")
+                                Image(systemName: mediaManager.mediaService == .netflix ? "tv.fill" : (mediaManager.isYouTube ? "play.rectangle.fill" : "music.note"))
                                     .font(.system(size: 20))
-                                    .foregroundColor(mediaManager.mediaService == .netflix ? Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) : .white.opacity(0.8))
+                                    .foregroundColor(mediaManager.accentColor)
                             }
                             .frame(width: 42, height: 42)
                         }
@@ -131,7 +131,7 @@ struct ContentView: View {
                                         .offset(x: max(0, min(currentPos - 4.5, totalWidth - 9)))
                                         .opacity(isHoveringSlider || isDraggingSlider ? 1 : 0)
                                 }
-                                .frame(height: 12)
+                                .frame(height: 16)
                                 .contentShape(Rectangle())
                                 .onHover { hovering in
                                     withAnimation(.easeInOut(duration: 0.15)) {
@@ -144,23 +144,28 @@ struct ContentView: View {
                                             mediaManager.isScrubbing = true
                                             isDraggingSlider = true
                                             let clampedX = max(0, min(value.location.x, totalWidth))
-                                            let newFraction = Double(clampedX / totalWidth)
+                                            let newFraction = Double(clampedX / max(totalWidth, 1))
                                             dragSliderTime = newFraction * mediaManager.duration
                                         }
                                         .onEnded { value in
                                             let clampedX = max(0, min(value.location.x, totalWidth))
-                                            let newFraction = Double(clampedX / totalWidth)
+                                            let newFraction = Double(clampedX / max(totalWidth, 1))
                                             let targetTime = newFraction * mediaManager.duration
                                             dragSliderTime = targetTime
                                             mediaManager.seek(to: targetTime)
-                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                                                 mediaManager.isScrubbing = false
                                                 isDraggingSlider = false
+                                                if !isHoveringIsland {
+                                                    withAnimation(springAnimation) {
+                                                        isExpanded = false
+                                                    }
+                                                }
                                             }
                                         }
                                 )
                             }
-                            .frame(height: 12)
+                            .frame(height: 16)
 
                             Text(MediaManager.formatTime(mediaManager.duration))
                                 .font(.system(size: 9.5, weight: .medium, design: .monospaced))
@@ -186,9 +191,9 @@ struct ContentView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 4.5))
                             .padding(.leading, 12)
                     } else if mediaManager.title != "Not Playing" || mediaManager.isPlaying {
-                        Image(systemName: mediaManager.mediaService == .netflix ? "tv.fill" : "music.note")
+                        Image(systemName: mediaManager.mediaService == .netflix ? "tv.fill" : (mediaManager.isYouTube ? "play.rectangle.fill" : "music.note"))
                             .font(.system(size: 11.5, weight: .semibold))
-                            .foregroundColor(mediaManager.mediaService == .netflix ? Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) : .white.opacity(0.85))
+                            .foregroundColor(mediaManager.accentColor)
                             .padding(.leading, 13)
                     }
 
@@ -235,6 +240,7 @@ struct ContentView: View {
                 )
             )
             .onHover { hovering in
+                isHoveringIsland = hovering
                 collapseWorkItem?.cancel()
                 if hovering {
                     withAnimation(springAnimation) {
