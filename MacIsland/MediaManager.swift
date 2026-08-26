@@ -72,43 +72,45 @@ final class MediaManager: ObservableObject {
         }
     }
     
+    private func runIsolatedAppleScript(_ source: String) -> String? {
+        var error: NSDictionary?
+        guard let script = NSAppleScript(source: source) else { return nil }
+        let result = script.executeAndReturnError(&error)
+        if let str = result.stringValue, !str.isEmpty, str != "null" {
+            return str
+        }
+        return nil
+    }
+
     func fetchNowPlayingInfo() {
         let runningApps = NSWorkspace.shared.runningApplications
         
-        let hasSpotify = runningApps.contains { app in
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            return id == "com.spotify.client" || name.localizedCaseInsensitiveContains("Spotify")
-        }
-        let hasMusic = runningApps.contains { app in
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            return id == "com.apple.Music" || name == "Music"
-        }
-        let hasBrave = runningApps.contains { app in
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
+        let hasSpotify = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
+        let hasMusic = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
+        let hasBrave = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
             return id == "com.brave.Browser" || id.hasPrefix("com.brave.Browser.app") || name == "Brave Browser" || name == "YouTube" || name.localizedCaseInsensitiveContains("Brave") || name.localizedCaseInsensitiveContains("YouTube")
         }
-        let hasChrome = runningApps.contains { app in
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name == "Google Chrome" || name.localizedCaseInsensitiveContains("Chrome")
+        let hasChrome = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
+            return id == "com.google.Chrome" || id.hasPrefix("com.google.Chrome.app") || name.localizedCaseInsensitiveContains("Chrome")
         }
-        let hasArc = runningApps.contains { app in
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
+        let hasArc = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
             return id == "company.thebrowser.Browser" || name == "Arc"
         }
-        let hasSafari = runningApps.contains { app in
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
+        let hasSafari = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
             return id == "com.apple.Safari" || name == "Safari"
         }
-        let hasEdge = runningApps.contains { app in
-            let id = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name == "Microsoft Edge" || name.localizedCaseInsensitiveContains("Edge")
+        let hasEdge = runningApps.contains {
+            let id = $0.bundleIdentifier ?? ""
+            let name = $0.localizedName ?? ""
+            return id == "com.microsoft.edgemac" || id.hasPrefix("com.microsoft.edgemac.app") || name.localizedCaseInsensitiveContains("Edge")
         }
 
         let rawScraper = """
@@ -205,46 +207,36 @@ final class MediaManager: ObservableObject {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
 
-        var scriptSource = "set webScraper to \"" + escapedScraper + "\"\n\n"
+        let chromiumBrowsers = [
+            ("Brave Browser", hasBrave, "Brave"),
+            ("Google Chrome", hasChrome, "Chrome"),
+            ("Arc", hasArc, "Arc"),
+            ("Microsoft Edge", hasEdge, "Edge")
+        ]
 
         // 1. Actively playing native apps
         if hasSpotify {
-            scriptSource += """
+            let src = """
             try
                 tell application "Spotify"
-                    if (player state as string) is "playing" then
-                        set trackName to ""
-                        try
-                            set trackName to (name of current track as text)
-                        end try
-                        set trackArtist to ""
-                        try
-                            if (artist of current track) is not missing value then
-                                set trackArtist to (artist of current track as text)
-                            end if
-                        end try
-                        set curPos to 0
-                        try
-                            if (player position) is not missing value then
-                                set curPos to (player position)
-                            end if
-                        end try
-                        set curDur to 0
-                        try
-                            if (duration of current track) is not missing value then
-                                set curDur to (duration of current track) / 1000
-                            end if
-                        end try
+                    if player state is playing then
+                        set trackName to (name of current track as text)
+                        set trackArtist to (artist of current track as text)
+                        set curPos to (player position)
+                        set curDur to (duration of current track) / 1000
                         return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|spotify"
                     end if
                 end tell
             end try
-            
             """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
         }
 
         if hasMusic {
-            scriptSource += """
+            let src = """
             try
                 tell application "Music"
                     if (player state as string) is "playing" then
@@ -274,28 +266,24 @@ final class MediaManager: ObservableObject {
                     end if
                 end tell
             end try
-            
             """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
         }
 
         // 2. Actively playing browser tabs
-        let chromiumBrowsers = [
-            ("Brave Browser", hasBrave, "Brave"),
-            ("Google Chrome", hasChrome, "Chrome"),
-            ("Arc", hasArc, "Arc"),
-            ("Microsoft Edge", hasEdge, "Edge")
-        ]
-
         for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
-            scriptSource += """
+            let src = """
+            set webScraper to "\(escapedScraper)"
             try
                 tell application "\(appName)"
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                set res to ""
-                                tell t to set res to execute javascript webScraper
+                                set res to execute t javascript webScraper
                                 if res is not missing value and res is not "null" and res contains "|playing|" then
                                     return "\(tag)|" & res
                                 end if
@@ -304,12 +292,16 @@ final class MediaManager: ObservableObject {
                     end repeat
                 end tell
             end try
-            
             """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
         }
 
         if hasSafari {
-            scriptSource += """
+            let src = """
+            set webScraper to "\(escapedScraper)"
             try
                 tell application "Safari"
                     repeat with win in every window
@@ -325,46 +317,85 @@ final class MediaManager: ObservableObject {
                     end repeat
                 end tell
             end try
-            
             """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
         }
 
-        // 3. Paused native apps
+        // 3. Paused browser tabs
+        for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
+            let src = """
+            set webScraper to "\(escapedScraper)"
+            try
+                tell application "\(appName)"
+                    repeat with win in every window
+                        repeat with t in every tab of win
+                            set tabURL to URL of t
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                set res to execute t javascript webScraper
+                                if res is not missing value and res is not "null" then
+                                    return "\(tag)|" & res
+                                end if
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
+        }
+
+        if hasSafari {
+            let src = """
+            set webScraper to "\(escapedScraper)"
+            try
+                tell application "Safari"
+                    repeat with win in every window
+                        repeat with t in every tab of win
+                            set tabURL to URL of t
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                set res to do JavaScript webScraper in t
+                                if res is not missing value and res is not "null" then
+                                    return "Safari|" & res
+                                end if
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
+        }
+
+        // 4. Paused native apps
         if hasSpotify {
-            scriptSource += """
+            let src = """
             try
                 tell application "Spotify"
-                    set trackName to ""
-                    try
-                        set trackName to (name of current track as text)
-                    end try
-                    set trackArtist to ""
-                    try
-                        if (artist of current track) is not missing value then
-                            set trackArtist to (artist of current track as text)
-                        end if
-                    end try
-                    set curPos to 0
-                    try
-                        if (player position) is not missing value then
-                            set curPos to (player position)
-                        end if
-                    end try
-                    set curDur to 0
-                    try
-                        if (duration of current track) is not missing value then
-                            set curDur to (duration of current track) / 1000
-                        end if
-                    end try
+                    set trackName to (name of current track as text)
+                    set trackArtist to (artist of current track as text)
+                    set curPos to (player position)
+                    set curDur to (duration of current track) / 1000
                     return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|spotify"
                 end tell
             end try
-            
             """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
         }
 
         if hasMusic {
-            scriptSource += """
+            let src = """
             try
                 tell application "Music"
                     set trackName to ""
@@ -392,72 +423,24 @@ final class MediaManager: ObservableObject {
                     return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|applemusic"
                 end tell
             end try
-            
             """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
         }
 
-        // 4. Paused browser tabs
-        for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
-            scriptSource += """
-            try
-                tell application "\(appName)"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                set res to ""
-                                tell t to set res to execute javascript webScraper
-                                if res is not missing value and res is not "null" then
-                                    return "\(tag)|" & res
-                                end if
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end try
-            
-            """
-        }
-
-        if hasSafari {
-            scriptSource += """
-            try
-                tell application "Safari"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                set res to do JavaScript webScraper in t
-                                if res is not missing value and res is not "null" then
-                                    return "Safari|" & res
-                                end if
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end try
-            
-            """
-        }
-
-        scriptSource += "\nreturn \"\"\n"
-        
-        executeScriptAndParse(scriptSource)
+        setNotPlaying()
     }
     
     private static let artworkCache = NSCache<NSString, NSImage>()
     private var consecutiveNotPlayingCount = 0
     
-    private func executeScriptAndParse(_ scriptSource: String) {
-        guard let script = NSAppleScript(source: scriptSource) else {
+    private func executeScriptAndParse(_ resultString: String) {
+        guard !resultString.isEmpty else {
             setNotPlaying()
             return
         }
-        
-        var error: NSDictionary?
-        let result = script.executeAndReturnError(&error)
-        
-        if let resultString = result.stringValue, !resultString.isEmpty {
             let parts = resultString.components(separatedBy: "|")
             if parts.count >= 5 {
                 let sourceApp = parts[0]
@@ -544,9 +527,6 @@ final class MediaManager: ObservableObject {
             } else {
                 setNotPlaying()
             }
-        } else {
-            setNotPlaying()
-        }
     }
     
     private func loadAppIcon(for sourceApp: String) {
