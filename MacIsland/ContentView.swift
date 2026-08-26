@@ -184,12 +184,12 @@ struct ContentView: View {
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 18, height: 18)
                             .clipShape(RoundedRectangle(cornerRadius: 4.5))
-                            .padding(.leading, 12)
+                            .padding(.leading, 18)
                     } else if mediaManager.title != "Not Playing" || mediaManager.isPlaying {
                         Image(systemName: "music.note")
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundColor(.white.opacity(0.85))
-                            .padding(.leading, 13)
+                            .padding(.leading, 19)
                     }
 
                     Spacer()
@@ -197,12 +197,12 @@ struct ContentView: View {
                     // Trailing Animated Audio Spectrum or Paused Indicator
                     if mediaManager.isPlaying {
                         AudioSpectrumView()
-                            .padding(.trailing, 13)
+                            .padding(.trailing, 18)
                     } else if mediaManager.title != "Not Playing" {
                         Image(systemName: "play.fill")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(.white.opacity(0.6))
-                            .padding(.trailing, 14)
+                            .padding(.trailing, 19)
                     }
                 }
                 .frame(width: collapsedWidth, height: collapsedHeight)
@@ -210,16 +210,25 @@ struct ContentView: View {
                 .allowsHitTesting(!isExpanded)
             }
             .frame(width: isExpanded ? expandedWidth : collapsedWidth, height: isExpanded ? expandedHeight : collapsedHeight)
-            .background(Color.black)
+            .background(
+                NotchShape(
+                    topRadius: isExpanded ? 12 : 10,
+                    bottomRadius: isExpanded ? 24 : 14
+                )
+                .fill(Color.black)
+            )
             .clipShape(
-                UnevenRoundedRectangle(
-                    topLeadingRadius: 0,
-                    bottomLeadingRadius: isExpanded ? 26 : 14,
-                    bottomTrailingRadius: isExpanded ? 26 : 14,
-                    topTrailingRadius: 0
+                NotchShape(
+                    topRadius: isExpanded ? 12 : 10,
+                    bottomRadius: isExpanded ? 24 : 14
                 )
             )
-            .contentShape(Rectangle())
+            .contentShape(
+                NotchShape(
+                    topRadius: isExpanded ? 12 : 10,
+                    bottomRadius: isExpanded ? 24 : 14
+                )
+            )
             .onHover { hovering in
                 collapseWorkItem?.cancel()
                 if hovering {
