@@ -19,7 +19,7 @@
 
 ##  Quick Start (Running from Source)
 
-### Option 1: 1-Click Terminal Command *(Recommended)*
+### Terminal Command-
 
 Open Terminal and run:
 
