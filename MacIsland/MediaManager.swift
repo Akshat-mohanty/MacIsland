@@ -357,10 +357,19 @@ final class MediaManager: ObservableObject {
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                set res to execute t javascript webScraper
-                                if res is not missing value and res is not "null" and res contains "|playing|" then
-                                    return "\(tag)|" & res
-                                end if
+                                try
+                                    set res to execute t javascript webScraper
+                                    if res is not missing value and res is not "null" and res contains "|playing|" then
+                                        return "\(tag)|" & res
+                                    end if
+                                on error
+                                    if tabURL contains "netflix.com" then
+                                        set tTitle to title of t
+                                        if tTitle is not missing value and tTitle is not "" then
+                                            return "\(tag)|" & tTitle & "|Netflix|playing|none|0|0|netflix"
+                                        end if
+                                    end if
+                                end try
                             end if
                         end repeat
                     end repeat
@@ -382,10 +391,19 @@ final class MediaManager: ObservableObject {
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                set res to do JavaScript webScraper in t
-                                if res is not missing value and res is not "null" and res contains "|playing|" then
-                                    return "Safari|" & res
-                                end if
+                                try
+                                    set res to do JavaScript webScraper in t
+                                    if res is not missing value and res is not "null" and res contains "|playing|" then
+                                        return "Safari|" & res
+                                    end if
+                                on error
+                                    if tabURL contains "netflix.com" then
+                                        set tTitle to name of t
+                                        if tTitle is not missing value and tTitle is not "" then
+                                            return "Safari|" & tTitle & "|Netflix|playing|none|0|0|netflix"
+                                        end if
+                                    end if
+                                end try
                             end if
                         end repeat
                     end repeat
@@ -453,10 +471,19 @@ final class MediaManager: ObservableObject {
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                set res to execute t javascript webScraper
-                                if res is not missing value and res is not "null" then
-                                    return "\(tag)|" & res
-                                end if
+                                try
+                                    set res to execute t javascript webScraper
+                                    if res is not missing value and res is not "null" then
+                                        return "\(tag)|" & res
+                                    end if
+                                on error
+                                    if tabURL contains "netflix.com" then
+                                        set tTitle to title of t
+                                        if tTitle is not missing value and tTitle is not "" then
+                                            return "\(tag)|" & tTitle & "|Netflix|paused|none|0|0|netflix"
+                                        end if
+                                    end if
+                                end try
                             end if
                         end repeat
                     end repeat
@@ -478,10 +505,19 @@ final class MediaManager: ObservableObject {
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com") then
-                                set res to do JavaScript webScraper in t
-                                if res is not missing value and res is not "null" then
-                                    return "Safari|" & res
-                                end if
+                                try
+                                    set res to do JavaScript webScraper in t
+                                    if res is not missing value and res is not "null" then
+                                        return "Safari|" & res
+                                    end if
+                                on error
+                                    if tabURL contains "netflix.com" then
+                                        set tTitle to name of t
+                                        if tTitle is not missing value and tTitle is not "" then
+                                            return "Safari|" & tTitle & "|Netflix|paused|none|0|0|netflix"
+                                        end if
+                                    end if
+                                end try
                             end if
                         end repeat
                     end repeat
