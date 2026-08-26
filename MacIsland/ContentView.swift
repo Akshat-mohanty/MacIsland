@@ -15,8 +15,10 @@ struct ContentView: View {
     @State private var isDraggingSlider = false
     @State private var dragSliderTime: Double = 0
     @AppStorage(AppDelegate.showsDockIconKey) private var showsDockIcon = false
+    @State private var collapseWorkItem: DispatchWorkItem?
     private let collapsedHeight: CGFloat = 31
     private let expandedHeight: CGFloat = 92
+    private let springAnimation: Animation = .spring(response: 0.42, dampingFraction: 0.78, blendDuration: 0)
     
     var body: some View {
         ZStack(alignment: .top) {
@@ -201,22 +203,36 @@ struct ContentView: View {
             }
             .frame(width: isExpanded ? 420 : 200, height: isExpanded ? expandedHeight : collapsedHeight)
             .background(Color.black)
-            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: isExpanded ? 36 : 18, bottomTrailingRadius: isExpanded ? 36 : 18, topTrailingRadius: 0))
-            // Clean, direct easing curve without lingering spring oscillation
-            .animation(.easeInOut(duration: 0.22), value: isExpanded)
+            .clipShape(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 0,
+                    bottomLeadingRadius: isExpanded ? 24 : 14,
+                    bottomTrailingRadius: isExpanded ? 24 : 14,
+                    topTrailingRadius: 0
+                )
+            )
+            // Fluid dynamic spring animation
+            .animation(springAnimation, value: isExpanded)
             .contentShape(Rectangle())
             .onHover { hovering in
-                guard hovering else {
-                    if !isDraggingSlider {
-                        isExpanded = false
+                collapseWorkItem?.cancel()
+                if hovering {
+                    withAnimation(springAnimation) {
+                        isExpanded = true
                     }
-                    return
+                } else {
+                    guard !isDraggingSlider else { return }
+                    let item = DispatchWorkItem {
+                        withAnimation(springAnimation) {
+                            isExpanded = false
+                        }
+                    }
+                    collapseWorkItem = item
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
                 }
-
-                isExpanded = true
             }
             // Dynamic island depth shadow
-            .shadow(color: Color.black.opacity(isExpanded ? 0.45 : 0.25), radius: isExpanded ? 16 : 6, x: 0, y: isExpanded ? 6 : 2)
+            .shadow(color: Color.black.opacity(isExpanded ? 0.5 : 0.25), radius: isExpanded ? 16 : 6, x: 0, y: isExpanded ? 6 : 2)
             .contextMenu {
                 Button {
                     showsDockIcon.toggle()
@@ -306,6 +322,56 @@ struct CompactEqualizerView: View {
                 phase = true
             }
         }
+    }
+}
+
+struct NotchShape: Shape {
+    var topRadius: CGFloat
+    var bottomRadius: CGFloat
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(topRadius, bottomRadius) }
+        set {
+            topRadius = newValue.first
+            bottomRadius = newValue.second
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let tR = max(0, topRadius)
+        let bR = max(0, bottomRadius)
+
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        // Top-left concave ear blending into menu bar / bezel
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + tR, y: rect.minY + tR),
+            control: CGPoint(x: rect.minX + tR, y: rect.minY)
+        )
+        // Left side line
+        path.addLine(to: CGPoint(x: rect.minX + tR, y: rect.maxY - bR))
+        // Bottom-left rounded corner
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX + tR + bR, y: rect.maxY),
+            control: CGPoint(x: rect.minX + tR, y: rect.maxY)
+        )
+        // Bottom side line
+        path.addLine(to: CGPoint(x: rect.maxX - tR - bR, y: rect.maxY))
+        // Bottom-right rounded corner
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - tR, y: rect.maxY - bR),
+            control: CGPoint(x: rect.maxX - tR, y: rect.maxY)
+        )
+        // Right side line
+        path.addLine(to: CGPoint(x: rect.maxX - tR, y: rect.minY + tR))
+        // Top-right concave ear blending into menu bar / bezel
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: rect.minY),
+            control: CGPoint(x: rect.maxX - tR, y: rect.minY)
+        )
+        // Top edge
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        return path
     }
 }
 

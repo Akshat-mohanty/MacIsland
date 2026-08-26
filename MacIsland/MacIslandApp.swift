@@ -100,8 +100,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.isMovableByWindowBackground = false
         window.isMovable = false
 
-        // Keep the window floating on top of other apps and menu bar.
+        // Keep the window floating on top of other apps and menu bar, including in full screen mode.
         window.level = .statusBar
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         // Remove the standard window border and shadow, our view will provide it if needed.
         window.styleMask.insert(.borderless)
