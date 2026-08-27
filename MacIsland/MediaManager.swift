@@ -213,7 +213,7 @@ final class MediaManager: ObservableObject {
         if hasSpotify {
             let src = """
             try
-                tell application "Spotify"
+                tell application id "com.spotify.client"
                     set pState to (player state as string)
                     set trackName to (name of current track as text)
                     set trackArtist to (artist of current track as text)
@@ -238,7 +238,7 @@ final class MediaManager: ObservableObject {
         if hasMusic {
             let src = """
             try
-                tell application "Music"
+                tell application id "com.apple.Music"
                     set pState to (player state as string)
                     set trackName to ""
                     try
@@ -562,7 +562,8 @@ final class MediaManager: ObservableObject {
         let calculatedPos = max(0, isPlayingBool ? (elapsed + timeSince * (rateVal > 0 ? rateVal : 1.0)) : elapsed)
         var finalPos = duration > 0 ? min(calculatedPos, duration) : calculatedPos
         
-        if isAppleMusic || service == .appleMusic || appName == "Music" || fullBundleId == "com.apple.Music" {
+        let isNativeMusicRunning = NSWorkspace.shared.runningApplications.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
+        if (isAppleMusic || service == .appleMusic || appName == "Music" || fullBundleId == "com.apple.Music") && isNativeMusicRunning {
             if finalDuration <= 0 || self.duration <= 0 {
                 let (_, musicDur) = self.fetchAppleMusicPositionAndDuration()
                 if musicDur > 0 {
@@ -612,9 +613,12 @@ final class MediaManager: ObservableObject {
     }
     
     private func fetchAppleMusicPositionAndDuration() -> (Double, Double) {
+        let isMusicRunning = NSWorkspace.shared.runningApplications.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
+        guard isMusicRunning else { return (0, 0) }
+        
         let scriptSrc = """
-        tell application "Music"
-            try
+        try
+            tell application id "com.apple.Music"
                 set curDur to 0
                 if (duration of current track) is not missing value then
                     set curDur to (duration of current track)
@@ -626,10 +630,10 @@ final class MediaManager: ObservableObject {
                     end if
                 end try
                 return (curPos as string) & "|" & (curDur as string)
-            on error
-                return "0|0"
-            end try
-        end tell
+            end tell
+        on error
+            return "0|0"
+        end try
         """
         guard let script = NSAppleScript(source: scriptSrc) else { return (0, 0) }
         var error: NSDictionary?
@@ -646,21 +650,24 @@ final class MediaManager: ObservableObject {
     }
     
     private func getOrFetchAppleMusicArtwork(for title: String, artist: String) -> NSImage? {
+        let isMusicRunning = NSWorkspace.shared.runningApplications.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
+        guard isMusicRunning else { return nil }
+        
         let cacheKey = "AppleMusic_\(title)_\(artist)" as NSString
         if let cached = Self.artworkCache.object(forKey: cacheKey) {
             return cached
         }
         
         let scriptSrc = """
-        tell application "Music"
-            try
+        try
+            tell application id "com.apple.Music"
                 if (count of artworks of current track) > 0 then
                     return raw data of artwork 1 of current track
                 end if
-            on error
-                return missing value
-            end try
-        end tell
+            end tell
+        on error
+            return missing value
+        end try
         """
         guard let script = NSAppleScript(source: scriptSrc) else { return nil }
         var error: NSDictionary?
@@ -854,18 +861,20 @@ final class MediaManager: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            let isAppleMusic = (service == .appleMusic || source == "MusicNative" || source == "Music")
-            let isSpotify = (service == .spotify || source == "SpotifyNative" || source == "Spotify")
+            let runningApps = NSWorkspace.shared.runningApplications
+            let isSpotifyAppRunning = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
+            let isMusicAppRunning = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
             
-            if isAppleMusic {
-                // For Apple Music: use AppleScript directly — it's the most reliable
-                _ = NSAppleScript(source: "tell application \"Music\" to set player position to \(clampedSeconds)")?.executeAndReturnError(nil)
-                // Also notify MediaRemote of the new position
+            let isAppleMusicNative = (source == "MusicNative" || (source == "Music" && isMusicAppRunning)) && isMusicAppRunning
+            let isSpotifyNative = (source == "SpotifyNative" || (source == "Spotify" && isSpotifyAppRunning)) && isSpotifyAppRunning
+            
+            if isAppleMusicNative {
+                _ = NSAppleScript(source: "try\ntell application id \"com.apple.Music\" to set player position to \(clampedSeconds)\nend try")?.executeAndReturnError(nil)
                 Self.mrSetElapsedTime?(clampedSeconds)
                 let dict: [String: Any] = ["kMRMediaRemoteOptionPlaybackPosition": NSNumber(value: clampedSeconds)]
                 _ = Self.mrSendCommand?(18, dict as CFDictionary)
-            } else if isSpotify {
-                _ = NSAppleScript(source: "tell application \"Spotify\" to set player position to \(clampedSeconds)")?.executeAndReturnError(nil)
+            } else if isSpotifyNative {
+                _ = NSAppleScript(source: "try\ntell application id \"com.spotify.client\" to set player position to \(clampedSeconds)\nend try")?.executeAndReturnError(nil)
                 Self.mrSetElapsedTime?(clampedSeconds)
                 let dict: [String: Any] = ["kMRMediaRemoteOptionPlaybackPosition": NSNumber(value: clampedSeconds)]
                 _ = Self.mrSendCommand?(18, dict as CFDictionary)
@@ -884,9 +893,8 @@ final class MediaManager: ObservableObject {
             // Delay then sync position from Music.app (for Apple Music) or MediaRemote
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 guard let self = self else { return }
-                if isAppleMusic {
-                    // Re-read position from Music.app to confirm seek landed
-                    let script = NSAppleScript(source: "tell application \"Music\" to get player position")
+                if isAppleMusicNative {
+                    let script = NSAppleScript(source: "try\ntell application id \"com.apple.Music\" to get player position\nend try")
                     var err: NSDictionary?
                     let desc = script?.executeAndReturnError(&err)
                     if let posStr = desc?.stringValue, let pos = Double(posStr) {
@@ -1045,13 +1053,17 @@ final class MediaManager: ObservableObject {
             else { cmdCode = 2 }
             _ = Self.mrSendCommand?(cmdCode, nil)
             
-            let isAppleMusic = (service == .appleMusic || source == "MusicNative" || source == "Music" || source.localizedCaseInsensitiveContains("Music"))
-            let isSpotify = (service == .spotify || source == "SpotifyNative" || source == "Spotify" || source.localizedCaseInsensitiveContains("Spotify"))
+            let runningApps = NSWorkspace.shared.runningApplications
+            let isSpotifyAppRunning = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
+            let isMusicAppRunning = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
             
-            if isSpotify {
-                _ = NSAppleScript(source: "tell application \"Spotify\" to \(command)")?.executeAndReturnError(nil)
-            } else if isAppleMusic {
-                _ = NSAppleScript(source: "tell application \"Music\" to \(command)")?.executeAndReturnError(nil)
+            let isSpotifyNative = (source == "SpotifyNative" || (source == "Spotify" && isSpotifyAppRunning)) && isSpotifyAppRunning
+            let isAppleMusicNative = (source == "MusicNative" || (source == "Music" && isMusicAppRunning)) && isMusicAppRunning
+            
+            if isSpotifyNative {
+                _ = NSAppleScript(source: "try\ntell application id \"com.spotify.client\" to \(command)\nend try")?.executeAndReturnError(nil)
+            } else if isAppleMusicNative {
+                _ = NSAppleScript(source: "try\ntell application id \"com.apple.Music\" to \(command)\nend try")?.executeAndReturnError(nil)
             } else if isYT && command != "playpause" {
                 // If skipping video on YouTube, seek forward/back 10 seconds
                 if command == "next track", dur > 0 {
@@ -1078,9 +1090,12 @@ final class MediaManager: ObservableObject {
         (function() {
             var cmd = '\(command)';
             if (cmd === 'playpause') {
+                var spPlayBtn = document.querySelector('[data-testid="control-button-playpause"], button[data-testid="control-button-playpause"], button[aria-label="Pause"], button[aria-label="Play"], [data-testid="play-button"], button[data-testid="play-button"]');
                 var nfPlayBtn = document.querySelector('[data-uia="control-play-pause-play"], [data-uia="control-play-pause-pause"], [data-uia="control-play-pause"], .button-nfVideosPlay, .button-nfVideosPause');
-                var ytPlayBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, [data-testid="control-button-playpause"], .web-chrome-playback-controls__play-pause-btn');
-                if (nfPlayBtn) {
+                var ytPlayBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, .web-chrome-playback-controls__play-pause-btn');
+                if (spPlayBtn) {
+                    spPlayBtn.click();
+                } else if (nfPlayBtn) {
                     nfPlayBtn.click();
                 } else if (ytPlayBtn) {
                     ytPlayBtn.click();
@@ -1092,9 +1107,12 @@ final class MediaManager: ObservableObject {
                     }
                 }
             } else if (cmd === 'next track') {
+                var spNextBtn = document.querySelector('[data-testid="control-button-skip-forward"], button[data-testid="control-button-skip-forward"], button[aria-label="Next"]');
                 var nfForwardBtn = document.querySelector('[data-uia="control-fast-forward"], [data-uia="control-seek-forward"], [data-uia="control-skip-forward"], .button-nfVideosFastForward');
                 var nextBtn = document.querySelector('.ytp-next-button, .next-button.ytmusic-player-bar, [data-testid="control-button-skip-forward"], .web-chrome-playback-controls__forward-btn');
-                if (nfForwardBtn) {
+                if (spNextBtn) {
+                    spNextBtn.click();
+                } else if (nfForwardBtn) {
                     nfForwardBtn.click();
                 } else if (nextBtn) {
                     nextBtn.click();
@@ -1106,9 +1124,12 @@ final class MediaManager: ObservableObject {
                     }
                 }
             } else if (cmd === 'previous track') {
+                var spPrevBtn = document.querySelector('[data-testid="control-button-skip-back"], button[data-testid="control-button-skip-back"], button[aria-label="Previous"]');
                 var nfRewindBtn = document.querySelector('[data-uia="control-seek-back"], [data-uia="control-fast-rewind"], [data-uia="control-skip-back"], .button-nfVideosRewind');
                 var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, [data-testid="control-button-skip-back"], .web-chrome-playback-controls__backward-btn');
-                if (nfRewindBtn) {
+                if (spPrevBtn) {
+                    spPrevBtn.click();
+                } else if (nfRewindBtn) {
                     nfRewindBtn.click();
                 } else if (prevBtn) {
                     prevBtn.click();
