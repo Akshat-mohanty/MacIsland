@@ -126,12 +126,15 @@ final class MediaManager: ObservableObject {
     }
     
     private func startPolling() {
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             DispatchQueue.global(qos: .userInitiated).async {
                 self?.fetchNowPlayingInfo()
             }
         }
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+        RunLoop.main.add(t, forMode: .common)
+        self.timer = t
+
+        let pt = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 if self.isPlaying && !self.isScrubbing && self.duration > 0 {
@@ -142,6 +145,9 @@ final class MediaManager: ObservableObject {
                 }
             }
         }
+        RunLoop.main.add(pt, forMode: .common)
+        self.progressTimer = pt
+
         DispatchQueue.global(qos: .userInitiated).async {
             self.fetchNowPlayingInfo()
         }
@@ -273,11 +279,19 @@ final class MediaManager: ObservableObject {
         }
 
         // Browser scrapers
-        let hasBrave = runningApps.contains { ($0.bundleIdentifier ?? "").contains("brave") }
-        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "").contains("Chrome") }
-        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "") == "company.thebrowser.Browser" }
-        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
-        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.microsoft.edgemac" }
+        let hasBrave = runningApps.contains { app in
+            let bid = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return bid.localizedCaseInsensitiveContains("brave") || name.localizedCaseInsensitiveContains("brave") || bid.localizedCaseInsensitiveContains("agimnkijcaahngcdmfeangaknmldooml")
+        }
+        let hasChrome = runningApps.contains { app in
+            let bid = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return bid.localizedCaseInsensitiveContains("chrome") || name.localizedCaseInsensitiveContains("chrome")
+        }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("thebrowser") }
+        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("safari") }
+        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("edge") }
 
         let chromiumBrowsers = [
             ("Brave Browser", hasBrave, "Brave"),
@@ -435,20 +449,28 @@ final class MediaManager: ObservableObject {
             set webScraper to "\(escapedScraper)"
             try
                 tell application "\(appName)"
+                    set fallbackCandidate to "null"
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com") then
                                 try
                                     set res to execute t javascript webScraper
-                                    if res is not missing value and res is not "null" and res contains "|playing|" then
-                                        return "\(tag)|" & res
+                                    if res is not missing value and res is not "null" then
+                                        if res contains "|playing|" then
+                                            return "\(tag)|" & res
+                                        else if fallbackCandidate is "null" then
+                                            set fallbackCandidate to "\(tag)|" & res
+                                        end if
                                     end if
                                 on error
                                 end try
                             end if
                         end repeat
                     end repeat
+                    if fallbackCandidate is not "null" then
+                        return fallbackCandidate
+                    end if
                 end tell
             end try
             """
@@ -463,20 +485,28 @@ final class MediaManager: ObservableObject {
             set webScraper to "\(escapedScraper)"
             try
                 tell application "Safari"
+                    set fallbackCandidate to "null"
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com") then
                                 try
                                     set res to do JavaScript webScraper in t
-                                    if res is not missing value and res is not "null" and res contains "|playing|" then
-                                        return "Safari|" & res
+                                    if res is not missing value and res is not "null" then
+                                        if res contains "|playing|" then
+                                            return "Safari|" & res
+                                        else if fallbackCandidate is "null" then
+                                            set fallbackCandidate to "Safari|" & res
+                                        end if
                                     end if
                                 on error
                                 end try
                             end if
                         end repeat
                     end repeat
+                    if fallbackCandidate is not "null" then
+                        return fallbackCandidate
+                    end if
                 end tell
             end try
             """
@@ -522,6 +552,8 @@ final class MediaManager: ObservableObject {
         let isYouTube = clientDisplayName.localizedCaseInsensitiveContains("YouTube") ||
                         appName.localizedCaseInsensitiveContains("YouTube") ||
                         fullBundleId.localizedCaseInsensitiveContains("youtube") ||
+                        fullBundleId.localizedCaseInsensitiveContains("agimnkijcaahngcdmfeangaknmldooml") ||
+                        fullBundleId.localizedCaseInsensitiveContains("cinhimbnkkaohjvfdleckmgagpcbmegf") ||
                         title.localizedCaseInsensitiveContains("YouTube") ||
                         artist.localizedCaseInsensitiveContains("YouTube") ||
                         rawAlbum.localizedCaseInsensitiveContains("YouTube")
@@ -536,6 +568,7 @@ final class MediaManager: ObservableObject {
         let isSpotify = clientDisplayName.localizedCaseInsensitiveContains("Spotify") ||
                         appName.localizedCaseInsensitiveContains("Spotify") ||
                         fullBundleId.localizedCaseInsensitiveContains("spotify") ||
+                        fullBundleId.localizedCaseInsensitiveContains("pjibgflleapemflmbggkgajjjonlganj") ||
                         title.localizedCaseInsensitiveContains("Spotify") ||
                         artist.localizedCaseInsensitiveContains("Spotify")
         
