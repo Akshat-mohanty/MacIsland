@@ -163,51 +163,6 @@ final class MediaManager: ObservableObject {
         return nil
     }
 
-    func fetchNowPlayingInfo() {
-        // First check fallback browser scraping which provides the most accurate DOM-level info
-        // for YouTube, Spotify Web, Apple Music Web, Netflix, etc.
-        self.checkFallbacks { [weak self] foundBrowserMedia in
-            if foundBrowserMedia {
-                return
-            }
-            
-            // If no browser tab was playing/detected, check system MediaRemote
-            self?.queryMediaRemote()
-        }
-    }
-    
-    private func queryMediaRemote() {
-        guard let getInfo = Self.mrGetNowPlayingInfo else {
-            self.setNotPlaying()
-            return
-        }
-        
-        let getClient = Self.mrGetNowPlayingClient
-        let getIsPlaying = Self.mrGetIsPlaying
-        
-        getIsPlaying?(DispatchQueue.global(qos: .userInitiated)) { [weak self] isAppPlaying in
-            getClient?(DispatchQueue.global(qos: .userInitiated)) { [weak self] client in
-                var clientBundleId = ""
-                var clientDisplayName = ""
-                var clientPID: pid_t = 0
-                if let client = client {
-                    clientBundleId = (Self.mrClientGetBundleId?(client) as String?) ?? ""
-                    clientDisplayName = (Self.mrClientGetDisplayName?(client) as String?) ?? ""
-                    clientPID = Self.mrClientGetPID?(client) ?? 0
-                }
-                
-                getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
-                    guard let self = self else { return }
-                    if let d = dict as? [String: Any],
-                       self.parseMediaRemoteInfo(d, isAppPlayingMR: isAppPlaying, clientBundleId: clientBundleId, clientDisplayName: clientDisplayName, clientPID: clientPID) {
-                        return
-                    }
-                    self.setNotPlaying()
-                }
-            }
-        }
-    }
-    
     // MARK: - Browser Scraper JS
     private var browserScraperJS: String {
         return #"""
@@ -221,19 +176,11 @@ final class MediaManager: ObservableObject {
                 return (el.innerText || el.textContent || '').trim();
             }
 
-            function findActiveVideo() {
-                var videos = Array.from(document.querySelectorAll('video'));
-                var playing = videos.find(function(x) { return !x.paused && !x.ended; });
-                if (playing) return playing;
-                var ytMain = document.querySelector('.html5-main-video');
-                if (ytMain) return ytMain;
-                return videos[0] || null;
-            }
-
-            function findActiveAudio() {
-                var audios = Array.from(document.querySelectorAll('audio'));
-                return audios.find(function(x) { return !x.paused && !x.ended; }) || null;
-            }
+            var videos = Array.from(document.querySelectorAll('video'));
+            var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0] || null;
+            var audios = Array.from(document.querySelectorAll('audio'));
+            var a = audios.find(function(x) { return !x.paused; }) || audios[0] || null;
+            var media = v || a;
 
             function parseTimeStr(s) {
                 var p = (s || '').trim().split(':').map(Number);
@@ -241,10 +188,6 @@ final class MediaManager: ObservableObject {
                 if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
                 return 0;
             }
-
-            var v = findActiveVideo();
-            var a = findActiveAudio();
-            var media = v || a;
 
             if (url.indexOf('music.youtube.com') !== -1) {
                 service = 'youtube';
@@ -422,18 +365,36 @@ final class MediaManager: ObservableObject {
         })();
         """#
     }
-    
-    private func checkFallbacks(completion: @escaping (Bool) -> Void) {
+
+    func fetchNowPlayingInfo() {
         let runningApps = NSWorkspace.shared.runningApplications
         
-        // 1. Native Spotify App
         let hasSpotify = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
+        let hasMusic = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
+        let hasBrave = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.brave.Browser" || ($0.localizedName ?? "").localizedCaseInsensitiveContains("brave") }
+        let hasChrome = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.google.Chrome" || ($0.localizedName ?? "").localizedCaseInsensitiveContains("google chrome") }
+        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" || ($0.bundleIdentifier ?? "") == "com.apple.SafariTechnologyPreview" }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("thebrowser") }
+        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("edgemac") }
+
+        let scraperJS = browserScraperJS
+        let escapedScraper = scraperJS
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
+        let chromiumBrowsers = [
+            ("Brave Browser", hasBrave, "Brave"),
+            ("Google Chrome", hasChrome, "Chrome"),
+            ("Arc", hasArc, "Arc"),
+            ("Microsoft Edge", hasEdge, "Edge")
+        ] as [(String, Bool, String)]
+
+        // 1. Actively playing native Spotify
         if hasSpotify {
             let src = """
             try
                 tell application id "com.spotify.client"
-                    set pState to (player state as string)
-                    if pState is "playing" then
+                    if player state is playing then
                         set trackName to (name of current track as text)
                         set trackArtist to (artist of current track as text)
                         set curPos to (player position)
@@ -447,21 +408,18 @@ final class MediaManager: ObservableObject {
                 end tell
             end try
             """
-            if let res = runIsolatedAppleScript(src), res.contains("|playing|") {
+            if let res = runIsolatedAppleScript(src) {
                 executeScriptAndParse(res)
-                completion(true)
                 return
             }
         }
 
-        // 2. Native Apple Music App
-        let hasMusic = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
+        // 2. Actively playing native Apple Music
         if hasMusic {
             let src = """
             try
                 tell application id "com.apple.Music"
-                    set pState to (player state as string)
-                    if pState is "playing" then
+                    if (player state as string) is "playing" then
                         set trackName to ""
                         try
                             set trackName to (name of current track as text)
@@ -489,50 +447,120 @@ final class MediaManager: ObservableObject {
                 end tell
             end try
             """
-            if let res = runIsolatedAppleScript(src), res.contains("|playing|") {
+            if let res = runIsolatedAppleScript(src) {
                 executeScriptAndParse(res)
-                completion(true)
                 return
             }
         }
 
-        // 3. Browser scraping
-        let scraperJS = browserScraperJS
-        let escapedScraper = scraperJS
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-
-        let hasBrave = runningApps.contains { app in
-            let bid = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            return bid.hasPrefix("com.brave") || name.localizedCaseInsensitiveContains("brave")
-        }
-        let hasChrome = runningApps.contains { app in
-            let bid = app.bundleIdentifier ?? ""
-            return bid.hasPrefix("com.google.Chrome") || (app.localizedName ?? "").localizedCaseInsensitiveContains("google chrome")
-        }
-        let hasSafari = runningApps.contains { app in
-            let bid = app.bundleIdentifier ?? ""
-            return bid == "com.apple.Safari" || bid == "com.apple.SafariTechnologyPreview"
-        }
-        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("thebrowser") }
-        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("edgemac") }
-
-        let chromiumBrowsers = [
-            ("Brave Browser", hasBrave, "Brave"),
-            ("Google Chrome", hasChrome, "Chrome"),
-            ("Arc", hasArc, "Arc"),
-            ("Microsoft Edge", hasEdge, "Edge")
-        ] as [(String, Bool, String)]
-
-        var fallbackFound: String? = nil
-
+        // 3. Actively playing Chromium browser tabs
         for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
             let src = """
             set webScraper to "\(escapedScraper)"
             try
                 tell application "\(appName)"
-                    set fallbackCandidate to "null"
+                    repeat with win in every window
+                        repeat with t in every tab of win
+                            set tabURL to URL of t
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
+                                try
+                                    set res to execute t javascript webScraper
+                                    if res is not missing value and res is not "null" and res contains "|playing|" then
+                                        return "\(tag)|" & res
+                                    end if
+                                on error
+                                end try
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
+        }
+
+        // 4. Actively playing Safari tabs
+        if hasSafari {
+            let src = """
+            set webScraper to "\(escapedScraper)"
+            try
+                tell application "Safari"
+                    repeat with win in every window
+                        repeat with t in every tab of win
+                            set tabURL to URL of t
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
+                                try
+                                    set res to do JavaScript webScraper in t
+                                    if res is not missing value and res is not "null" and res contains "|playing|" then
+                                        return "Safari|" & res
+                                    end if
+                                on error
+                                end try
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
+        }
+
+        // 5. Actively playing MediaRemote (covers QuickTime, Podcasts, PWAs, etc.)
+        if let getInfo = Self.mrGetNowPlayingInfo {
+            var mediaRemoteActive = false
+            let sema = DispatchSemaphore(value: 0)
+            
+            if let getIsPlaying = Self.mrGetIsPlaying {
+                getIsPlaying(DispatchQueue.global(qos: .userInitiated)) { isPlaying in
+                    if isPlaying {
+                        getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                            if let d = dict as? [String: Any], let self = self {
+                                mediaRemoteActive = self.parseMediaRemoteInfo(d, isPlayingBool: true)
+                            }
+                            sema.signal()
+                        }
+                    } else {
+                        getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                            if let d = dict as? [String: Any], let self = self {
+                                let rate = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
+                                if rate > 0 {
+                                    mediaRemoteActive = self.parseMediaRemoteInfo(d, isPlayingBool: true)
+                                }
+                            }
+                            sema.signal()
+                        }
+                    }
+                }
+            } else {
+                getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
+                    if let d = dict as? [String: Any], let self = self {
+                        let rate = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
+                        if rate > 0 {
+                            mediaRemoteActive = self.parseMediaRemoteInfo(d, isPlayingBool: true)
+                        }
+                    }
+                    sema.signal()
+                }
+            }
+            
+            _ = sema.wait(timeout: .now() + 0.15)
+            if mediaRemoteActive {
+                return
+            }
+        }
+
+        // 6. Fallback: Paused Chromium browser tabs
+        for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
+            let src = """
+            set webScraper to "\(escapedScraper)"
+            try
+                tell application "\(appName)"
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
@@ -540,41 +568,28 @@ final class MediaManager: ObservableObject {
                                 try
                                     set res to execute t javascript webScraper
                                     if res is not missing value and res is not "null" then
-                                        if res contains "|playing|" then
-                                            return "\(tag)|" & res
-                                        else if fallbackCandidate is "null" then
-                                            set fallbackCandidate to "\(tag)|" & res
-                                        end if
+                                        return "\(tag)|" & res
                                     end if
                                 on error
                                 end try
                             end if
                         end repeat
                     end repeat
-                    if fallbackCandidate is not "null" then
-                        return fallbackCandidate
-                    end if
                 end tell
             end try
             """
-            if let res = runIsolatedAppleScript(src), !res.isEmpty, res != "null" {
-                if res.contains("|playing|") {
-                    executeScriptAndParse(res)
-                    completion(true)
-                    return
-                } else if fallbackFound == nil {
-                    fallbackFound = res
-                }
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
             }
         }
 
-        // Safari
+        // 7. Fallback: Paused Safari tabs
         if hasSafari {
             let src = """
             set webScraper to "\(escapedScraper)"
             try
                 tell application "Safari"
-                    set fallbackCandidate to "null"
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
@@ -582,91 +597,105 @@ final class MediaManager: ObservableObject {
                                 try
                                     set res to do JavaScript webScraper in t
                                     if res is not missing value and res is not "null" then
-                                        if res contains "|playing|" then
-                                            return "Safari|" & res
-                                        else if fallbackCandidate is "null" then
-                                            set fallbackCandidate to "Safari|" & res
-                                        end if
+                                        return "Safari|" & res
                                     end if
                                 on error
                                 end try
                             end if
                         end repeat
                     end repeat
-                    if fallbackCandidate is not "null" then
-                        return fallbackCandidate
-                    end if
                 end tell
             end try
             """
-            if let res = runIsolatedAppleScript(src), !res.isEmpty, res != "null" {
-                if res.contains("|playing|") {
-                    executeScriptAndParse(res)
-                    completion(true)
-                    return
-                } else if fallbackFound == nil {
-                    fallbackFound = res
-                }
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
             }
         }
-        
-        if let fallback = fallbackFound {
-            executeScriptAndParse(fallback)
-            completion(true)
-            return
+
+        // 8. Fallback: Paused Native Spotify
+        if hasSpotify {
+            let src = """
+            try
+                tell application id "com.spotify.client"
+                    set trackName to (name of current track as text)
+                    set trackArtist to (artist of current track as text)
+                    set curPos to (player position)
+                    set curDur to (duration of current track) / 1000
+                    set trackArt to "none"
+                    try
+                        set trackArt to (artwork url of current track as text)
+                    end try
+                    return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|" & trackArt & "|" & curPos & "|" & curDur & "|spotify"
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
         }
 
-        completion(false)
+        // 9. Fallback: Paused Native Apple Music
+        if hasMusic {
+            let src = """
+            try
+                tell application id "com.apple.Music"
+                    set trackName to ""
+                    try
+                        set trackName to (name of current track as text)
+                    end try
+                    set trackArtist to ""
+                    try
+                        if (artist of current track) is not missing value then
+                            set trackArtist to (artist of current track as text)
+                        end if
+                    end try
+                    set curPos to 0
+                    try
+                        if (player position) is not missing value then
+                            set curPos to (player position)
+                        end if
+                    end try
+                    set curDur to 0
+                    try
+                        if (duration of current track) is not missing value then
+                            set curDur to (duration of current track)
+                        end if
+                    end try
+                    return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|applemusic"
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src) {
+                executeScriptAndParse(res)
+                return
+            }
+        }
+
+        setNotPlaying()
     }
     
     // MARK: - MediaRemote Parsing
     private func parseMediaRemoteInfo(
         _ d: [String: Any],
-        isAppPlayingMR: Bool,
-        clientBundleId: String,
-        clientDisplayName: String,
-        clientPID: pid_t
+        isPlayingBool: Bool
     ) -> Bool {
         let rawTitle = (d["kMRMediaRemoteNowPlayingInfoTitle"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !rawTitle.isEmpty else { return false }
         
-        let rateVal = (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoPlaybackRate"] as? Double ?? 0)
-        let isPlayingBool = isAppPlayingMR || (rateVal > 0)
         let duration = (d["kMRMediaRemoteNowPlayingInfoDuration"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoDuration"] as? Double ?? 0)
         let elapsed = (d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? NSNumber)?.doubleValue ?? (d["kMRMediaRemoteNowPlayingInfoElapsedTime"] as? Double ?? 0)
         let timestamp = d["kMRMediaRemoteNowPlayingInfoTimestamp"] as? Date ?? Date()
         let rawArtist = (d["kMRMediaRemoteNowPlayingInfoArtist"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let rawAlbum = (d["kMRMediaRemoteNowPlayingInfoAlbum"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         
-        var runningApp: NSRunningApplication?
-        if clientPID > 0 {
-            runningApp = NSRunningApplication(processIdentifier: clientPID)
-        }
-        let appName = runningApp?.localizedName ?? clientDisplayName
-        let fullBundleId = runningApp?.bundleIdentifier ?? clientBundleId
-        
         var title = rawTitle
         var artist = rawArtist
         var service: MediaService = .other
         
-        let isYouTubeService = clientDisplayName.localizedCaseInsensitiveContains("YouTube") ||
-                        appName.localizedCaseInsensitiveContains("YouTube") ||
-                        fullBundleId.localizedCaseInsensitiveContains("youtube") ||
-                        fullBundleId.localizedCaseInsensitiveContains("agimnkijcaahngcdmfeangaknmldooml") ||
-                        fullBundleId.localizedCaseInsensitiveContains("cinhimbnkkaohjvfdleckmgagpcbmegf") ||
-                        rawAlbum.localizedCaseInsensitiveContains("YouTube")
-        
-        let isNetflixService = clientDisplayName.localizedCaseInsensitiveContains("Netflix") ||
-                        appName.localizedCaseInsensitiveContains("Netflix") ||
-                        fullBundleId.localizedCaseInsensitiveContains("netflix") ||
-                        rawAlbum.localizedCaseInsensitiveContains("Netflix")
-        
-        let isSpotifyService = clientDisplayName.localizedCaseInsensitiveContains("Spotify") ||
-                        appName.localizedCaseInsensitiveContains("Spotify") ||
-                        fullBundleId.localizedCaseInsensitiveContains("spotify") ||
-                        fullBundleId.localizedCaseInsensitiveContains("pjibgflleapemflmbggkgajjjonlganj")
-        
-        let isAppleMusicService = (clientDisplayName == "Music" || appName == "Music" || fullBundleId == "com.apple.Music")
+        let isYouTubeService = rawAlbum.localizedCaseInsensitiveContains("YouTube") || rawTitle.localizedCaseInsensitiveContains("YouTube")
+        let isNetflixService = rawAlbum.localizedCaseInsensitiveContains("Netflix") || rawTitle.localizedCaseInsensitiveContains("Netflix")
         
         if isYouTubeService {
             service = .youtube
@@ -674,7 +703,7 @@ final class MediaManager: ObservableObject {
                 .replacingOccurrences(of: " - YouTube", with: "", options: .caseInsensitive)
                 .replacingOccurrences(of: " - YouTube Music", with: "", options: .caseInsensitive)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if artist.isEmpty || artist == appName {
+            if artist.isEmpty {
                 artist = rawAlbum.isEmpty ? "YouTube" : rawAlbum
             }
         } else if isNetflixService {
@@ -684,16 +713,9 @@ final class MediaManager: ObservableObject {
                 .replacingOccurrences(of: " | Netflix", with: "", options: .caseInsensitive)
                 .replacingOccurrences(of: "Watch ", with: "", options: .caseInsensitive)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if title.isEmpty || title.lowercased() == "home" || title.lowercased() == "browse" {
-                title = "Netflix"
-            }
             if artist.isEmpty {
                 artist = rawAlbum.isEmpty ? "Netflix" : rawAlbum
             }
-        } else if isSpotifyService {
-            service = .spotify
-        } else if isAppleMusicService {
-            service = .appleMusic
         } else {
             service = .other
         }
@@ -719,34 +741,19 @@ final class MediaManager: ObservableObject {
             }
         }
         
-        var finalDuration = duration
+        let finalDuration = duration
         let timeSince = Date().timeIntervalSince(timestamp)
-        let calculatedPos = max(0, isPlayingBool ? (elapsed + timeSince * (rateVal > 0 ? rateVal : 1.0)) : elapsed)
+        let calculatedPos = max(0, isPlayingBool ? (elapsed + timeSince) : elapsed)
         let finalPos = duration > 0 ? min(calculatedPos, duration) : calculatedPos
-        
-        let isNativeMusicRunning = NSWorkspace.shared.runningApplications.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
-        if service == .appleMusic && isNativeMusicRunning {
-            if finalDuration <= 0 || self.duration <= 0 {
-                let (_, musicDur) = self.fetchAppleMusicPositionAndDuration()
-                if musicDur > 0 {
-                    finalDuration = musicDur
-                }
-            }
-            if artwork == nil {
-                artwork = self.getOrFetchAppleMusicArtwork(for: title, artist: artist)
-            }
-        }
         
         let finalTitle = title
         let finalArtist = artist
         let finalService = service
         let finalArtwork = artwork
-        let finalAppName = appName
-        let finalBundleId = fullBundleId
         
         Task { @MainActor in
             self.consecutiveNotPlayingCount = 0
-            self.currentSource = finalAppName.isEmpty ? "MediaRemote" : finalAppName
+            self.currentSource = "MediaRemote"
             let titleChanged = (self.title != finalTitle)
             self.title = finalTitle
             self.artist = finalArtist
@@ -764,47 +771,11 @@ final class MediaManager: ObservableObject {
             self.duration = finalDuration
             if let artwork = finalArtwork {
                 self.artworkImage = artwork
-            } else if finalService != .youtube || self.artworkImage == nil {
-                self.loadAppIcon(for: self.currentSource, bundleId: finalBundleId)
+            } else if self.artworkImage == nil {
+                self.loadAppIcon(for: "MediaRemote")
             }
         }
         return true
-    }
-    
-    private func fetchAppleMusicPositionAndDuration() -> (Double, Double) {
-        let isMusicRunning = NSWorkspace.shared.runningApplications.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
-        guard isMusicRunning else { return (0, 0) }
-        let scriptSrc = """
-        try
-            tell application id "com.apple.Music"
-                set curDur to 0
-                if (duration of current track) is not missing value then
-                    set curDur to (duration of current track)
-                end if
-                set curPos to 0
-                try
-                    if (player position) is not missing value then
-                        set curPos to (player position)
-                    end if
-                end try
-                return (curPos as string) & "|" & (curDur as string)
-            end tell
-        on error
-            return "0|0"
-        end try
-        """
-        guard let script = NSAppleScript(source: scriptSrc) else { return (0, 0) }
-        var error: NSDictionary?
-        let desc = script.executeAndReturnError(&error)
-        if let str = desc.stringValue, !str.isEmpty {
-            let parts = str.components(separatedBy: "|")
-            if parts.count >= 2 {
-                let pos = Double(parts[0]) ?? 0
-                let dur = Double(parts[1]) ?? 0
-                return (pos, dur)
-            }
-        }
-        return (0, 0)
     }
     
     private func getOrFetchAppleMusicArtwork(for title: String, artist: String) -> NSImage? {
@@ -898,7 +869,7 @@ final class MediaManager: ObservableObject {
                         guard let self = self else { return }
                         if let appleMusicArt = self.getOrFetchAppleMusicArtwork(for: newTitle, artist: newArtist) {
                             Task { @MainActor in self.artworkImage = appleMusicArt }
-                        } else {
+                        } else if self.artworkImage == nil {
                             Task { @MainActor in
                                 self.lastArtworkURL = ""
                                 self.loadAppIcon(for: sourceApp)
@@ -923,19 +894,6 @@ final class MediaManager: ObservableObject {
     }
     
     private func loadAppIcon(for sourceApp: String, bundleId: String? = nil) {
-        if mediaService == .netflix || sourceApp.localizedCaseInsensitiveContains("Netflix") {
-            let runningApps = NSWorkspace.shared.runningApplications
-            if let netflixApp = runningApps.first(where: {
-                ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("netflix") ||
-                ($0.localizedName ?? "").localizedCaseInsensitiveContains("netflix")
-            }), let bundleUrl = netflixApp.bundleURL {
-                let img = NSWorkspace.shared.icon(forFile: bundleUrl.path)
-                Self.artworkCache.setObject(img, forKey: "netflixAppIcon" as NSString)
-                self.artworkImage = img
-                return
-            }
-        }
-
         let resolvedBundleId: String
         if let bid = bundleId, !bid.isEmpty {
             resolvedBundleId = bid
@@ -1136,21 +1094,7 @@ final class MediaManager: ObservableObject {
             }
             
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.8) { [weak self] in
-                guard let self = self else { return }
-                if isAppleMusicNative {
-                    let script = NSAppleScript(source: "try\ntell application id \"com.apple.Music\" to get player position\nend try")
-                    var err: NSDictionary?
-                    let desc = script?.executeAndReturnError(&err)
-                    if let posStr = desc?.stringValue, let pos = Double(posStr) {
-                        Task { @MainActor in
-                            if Date() < self.seekLockUntil {
-                                self.currentTime = pos
-                            }
-                        }
-                    }
-                } else {
-                    self.fetchNowPlayingInfo()
-                }
+                self?.fetchNowPlayingInfo()
             }
         }
     }
