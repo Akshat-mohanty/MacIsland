@@ -163,10 +163,27 @@ final class MediaManager: ObservableObject {
         return nil
     }
 
+    // Bundle IDs that are browsers — for these we always use the JS DOM scraper
+    // because MediaRemote gets play state and artwork from browsers unreliably.
+    private static func isBrowserBundleId(_ bundleId: String) -> Bool {
+        guard !bundleId.isEmpty else { return false }
+        let bid = bundleId.lowercased()
+        return bid.hasPrefix("com.brave.")
+            || bid.hasPrefix("com.google.chrome")
+            || bid == "com.apple.safari"
+            || bid == "com.apple.safaritechnologypreview"
+            || bid.hasPrefix("company.thebrowser")
+            || bid.hasPrefix("com.microsoft.edgemac")
+            || bid.hasPrefix("org.mozilla.firefox")
+            || bid.hasPrefix("com.operasoftware")
+            || bid.hasPrefix("com.vivaldi")
+    }
+
     func fetchNowPlayingInfo() {
         if let getInfo = Self.mrGetNowPlayingInfo {
             if let getClient = Self.mrGetNowPlayingClient {
                 getClient(DispatchQueue.global(qos: .userInitiated)) { [weak self] client in
+                    guard let self = self else { return }
                     var clientBundleId = ""
                     var clientDisplayName = ""
                     var clientPID: pid_t = 0
@@ -175,7 +192,15 @@ final class MediaManager: ObservableObject {
                         clientDisplayName = (Self.mrClientGetDisplayName?(client) as String?) ?? ""
                         clientPID = Self.mrClientGetPID?(client) ?? 0
                     }
-                    
+
+                    // KEY FIX: If the active media client is a browser, always bypass
+                    // MediaRemote and use the JS DOM scraper. Browsers don't send artwork
+                    // to MediaRemote and the PlaybackRate is often stale/wrong.
+                    if Self.isBrowserBundleId(clientBundleId) {
+                        self.checkFallbacks()
+                        return
+                    }
+
                     getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
                         guard let self = self else { return }
                         if let d = dict as? [String: Any],
@@ -213,14 +238,19 @@ final class MediaManager: ObservableObject {
 
             function isMediaPlaying(el) {
                 if (!el) return false;
-                return (!el.paused && !el.ended && el.currentTime > 0 && el.readyState > 1);
+                // readyState 2+ means media has enough data to play
+                return (!el.paused && !el.ended && el.readyState >= 2);
             }
             function findActiveVideo() {
                 var videos = Array.from(document.querySelectorAll('video'));
-                return videos.find(function(x) { return isMediaPlaying(x); })
-                    || document.querySelector('.html5-main-video')
-                    || videos[0]
-                    || null;
+                // First try: find a video that is actively playing
+                var playing = videos.find(function(x) { return !x.paused && !x.ended && x.readyState >= 2; });
+                if (playing) return playing;
+                // Second try: YouTube main video element
+                var ytMain = document.querySelector('.html5-main-video');
+                if (ytMain) return ytMain;
+                // Third try: any visible video element
+                return videos[0] || null;
             }
             function findActiveAudio() {
                 var audios = Array.from(document.querySelectorAll('audio'));
@@ -264,14 +294,18 @@ final class MediaManager: ObservableObject {
                 var ytArtistEl = document.querySelector('#owner ytd-channel-name yt-formatted-string a, ytd-channel-name a, #channel-name a');
                 artist = ytArtistEl ? getText(ytArtistEl) : 'YouTube';
 
-                // Strict play state using video element + player container
+                // Strict play state: video element is ground truth, cross-check with player container CSS class
                 var ytPlayerEl = document.querySelector('.html5-video-player');
                 if (v) {
-                    var strictPlaying = isMediaPlaying(v);
+                    var vidPlaying = !v.paused && !v.ended && v.readyState >= 2;
+                    // If player container explicitly has paused-mode class, override to paused
                     if (ytPlayerEl && ytPlayerEl.classList.contains('paused-mode')) {
-                        strictPlaying = false;
+                        vidPlaying = false;
                     }
-                    isPlaying = strictPlaying ? 'playing' : 'paused';
+                    isPlaying = vidPlaying ? 'playing' : 'paused';
+                } else if (ytPlayerEl) {
+                    // No video element found yet, use CSS class as fallback
+                    isPlaying = ytPlayerEl.classList.contains('playing-mode') ? 'playing' : 'paused';
                 } else {
                     isPlaying = 'paused';
                 }
@@ -291,6 +325,7 @@ final class MediaManager: ObservableObject {
                     if (shParts.length > 1) ytVideoId = shParts[1].split('?')[0].split('/')[0];
                 }
                 if (ytVideoId) imgUrl = 'https://i.ytimg.com/vi/' + ytVideoId + '/hqdefault.jpg';
+
 
             } else if (url.indexOf('spotify.com') !== -1) {
                 service = 'spotify';
