@@ -225,7 +225,7 @@ final class MediaManager: ObservableObject {
                 }
 
                 if (!track) {
-                    var ytTitleEl = document.querySelector('ytd-watch-metadata #title h1 yt-formatted-string, h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string, ytd-watch-flexy h1.title yt-formatted-string, .ytp-title-link, h1.title, h1.ytd-video-primary-info-renderer yt-formatted-string');
+                    var ytTitleEl = document.querySelector('#above-the-fold ytd-watch-metadata #title h1, ytd-watch-metadata #title h1, h1.ytd-watch-metadata yt-formatted-string, ytd-watch-flexy h1.title, .ytp-title-link, h1.title');
                     track = ytTitleEl ? getText(ytTitleEl) : '';
                 }
                 if (!track && document.title) {
@@ -236,24 +236,23 @@ final class MediaManager: ObservableObject {
                 }
 
                 if (!artist || artist === 'YouTube') {
-                    var ytArtistEl = document.querySelector(
-                        'ytd-watch-metadata #owner #text a, ' +
-                        'ytd-watch-metadata #owner ytd-channel-name a, ' +
-                        'ytd-watch-metadata ytd-channel-name yt-formatted-string a, ' +
-                        'ytd-watch-metadata ytd-channel-name yt-formatted-string, ' +
-                        'ytd-video-owner-renderer #channel-name a, ' +
-                        'ytd-video-owner-renderer #text a, ' +
-                        '#owner #channel-name a, ' +
-                        '#upload-info #channel-name a, ' +
-                        'ytd-channel-name yt-formatted-string a, ' +
-                        '#owner ytd-channel-name a, ' +
-                        '.ytp-title-channel-name a, ' +
-                        '.ytp-title-channel-name, ' +
-                        'ytd-channel-name a'
-                    );
-                    if (ytArtistEl) {
-                        var aText = getText(ytArtistEl);
-                        if (aText && aText !== 'YouTube') artist = aText;
+                    var owner = document.querySelector('#owner') || document.querySelector('ytd-watch-metadata #owner') || document.querySelector('ytd-video-owner-renderer') || document.querySelector('#upload-info');
+                    if (owner) {
+                        var allA = Array.from(owner.querySelectorAll('a'));
+                        for (var i = 0; i < allA.length; i++) {
+                            var txt = getText(allA[i]);
+                            if (txt.length > 0 && txt !== 'YouTube') {
+                                artist = txt;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if (!artist || artist === 'YouTube') {
+                    var channelEl = document.querySelector('ytd-watch-metadata #owner #text a, ytd-watch-metadata ytd-channel-name a, .ytp-title-channel-name');
+                    if (channelEl) {
+                        var cText = getText(channelEl);
+                        if (cText && cText !== 'YouTube') artist = cText;
                     }
                 }
                 artist = artist || 'YouTube';
@@ -498,7 +497,7 @@ final class MediaManager: ObservableObject {
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
                                 try
-                                    set res to execute t javascript webScraper
+                                    tell t to set res to execute javascript webScraper
                                     if res is not missing value and res is not "null" and res contains "|playing|" then
                                         return "\(tag)|" & res
                                     end if
@@ -600,7 +599,7 @@ final class MediaManager: ObservableObject {
                             set tabURL to URL of t
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
                                 try
-                                    set res to execute t javascript webScraper
+                                    tell t to set res to execute javascript webScraper
                                     if res is not missing value and res is not "null" then
                                         return "\(tag)|" & res
                                     end if
@@ -1212,7 +1211,7 @@ final class MediaManager: ObservableObject {
                                 set tabURL to URL of t
                                 if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "soundcloud.com" or tabURL contains "twitch.tv" or tabURL contains "vimeo.com") then
                                     try
-                                        execute t javascript "\(escapedJsSeek)"
+                                        tell t to execute javascript "\(escapedJsSeek)"
                                     on error
                                     end try
                                 end if
@@ -1429,7 +1428,7 @@ final class MediaManager: ObservableObject {
                                 set tabURL to URL of t
                                 if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com") then
                                     try
-                                        execute t javascript "\(escapedJsCmd)"
+                                        tell t to execute javascript "\(escapedJsCmd)"
                                     on error
                                     end try
                                 end if
