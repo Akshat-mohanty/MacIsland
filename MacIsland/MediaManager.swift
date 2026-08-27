@@ -27,13 +27,13 @@ final class MediaManager: ObservableObject {
     var accentColor: Color {
         switch mediaService {
         case .spotify:
-            return Color(red: 0.22, green: 0.86, blue: 0.45) // Spotify Green
+            return Color(red: 0.22, green: 0.86, blue: 0.45)
         case .youtube:
-            return Color(red: 255/255.0, green: 51/255.0, blue: 51/255.0) // YouTube Red #FF3333
+            return Color(red: 255/255.0, green: 51/255.0, blue: 51/255.0)
         case .appleMusic:
-            return Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0) // Apple Music Pink-Red
+            return Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0)
         case .netflix:
-            return Color(red: 229/255.0, green: 9/255.0, blue: 20/255.0) // Netflix Red
+            return Color(red: 229/255.0, green: 9/255.0, blue: 20/255.0)
         case .other:
             return Color(red: 0.22, green: 0.86, blue: 0.45)
         }
@@ -46,7 +46,7 @@ final class MediaManager: ObservableObject {
     private var consecutiveNotPlayingCount = 0
     private static let artworkCache = NSCache<NSString, NSImage>()
     
-    // MARK: - MediaRemote Private Framework Dynamically Loaded Symbols
+    // MARK: - MediaRemote Private Framework
     private static let mediaRemoteHandle: UnsafeMutableRawPointer? = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_NOW)
     
     private typealias MRRegisterForNotificationsFunc = @convention(c) (DispatchQueue) -> Void
@@ -164,7 +164,6 @@ final class MediaManager: ObservableObject {
     }
 
     func fetchNowPlayingInfo() {
-        // 1. Check MediaRemote asynchronously
         if let getInfo = Self.mrGetNowPlayingInfo {
             if let getClient = Self.mrGetNowPlayingClient {
                 getClient(DispatchQueue.global(qos: .userInitiated)) { [weak self] client in
@@ -180,12 +179,7 @@ final class MediaManager: ObservableObject {
                     getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
                         guard let self = self else { return }
                         if let d = dict as? [String: Any],
-                           self.parseMediaRemoteInfo(
-                               d,
-                               clientBundleId: clientBundleId,
-                               clientDisplayName: clientDisplayName,
-                               clientPID: clientPID
-                           ) {
+                           self.parseMediaRemoteInfo(d, clientBundleId: clientBundleId, clientDisplayName: clientDisplayName, clientPID: clientPID) {
                             return
                         }
                         self.checkFallbacks()
@@ -195,12 +189,7 @@ final class MediaManager: ObservableObject {
                 getInfo(DispatchQueue.global(qos: .userInitiated)) { [weak self] dict in
                     guard let self = self else { return }
                     if let d = dict as? [String: Any],
-                       self.parseMediaRemoteInfo(
-                           d,
-                           clientBundleId: "",
-                           clientDisplayName: "",
-                           clientPID: 0
-                       ) {
+                       self.parseMediaRemoteInfo(d, clientBundleId: "", clientDisplayName: "", clientPID: 0) {
                         return
                     }
                     self.checkFallbacks()
@@ -211,242 +200,304 @@ final class MediaManager: ObservableObject {
         }
     }
     
-    private func checkFallbacks() {
-        let runningApps = NSWorkspace.shared.runningApplications
-        
-        // Native Spotify
-        let hasSpotify = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
-        if hasSpotify {
-            let src = """
-            try
-                tell application id "com.spotify.client"
-                    set pState to (player state as string)
-                    set trackName to (name of current track as text)
-                    set trackArtist to (artist of current track as text)
-                    set curPos to (player position)
-                    set curDur to (duration of current track) / 1000
-                    set trackArt to "none"
-                    try
-                        set trackArt to (artwork url of current track as text)
-                    end try
-                    return "SpotifyNative|" & trackName & "|" & trackArtist & "|" & pState & "|" & trackArt & "|" & curPos & "|" & curDur & "|spotify"
-                end tell
-            end try
-            """
-            if let res = runIsolatedAppleScript(src), res.contains("|playing|") {
-                executeScriptAndParse(res)
-                return
-            }
-        }
-
-        // Native Apple Music
-        let hasMusic = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
-        if hasMusic {
-            let src = """
-            try
-                tell application id "com.apple.Music"
-                    set pState to (player state as string)
-                    set trackName to ""
-                    try
-                        set trackName to (name of current track as text)
-                    end try
-                    set trackArtist to ""
-                    try
-                        if (artist of current track) is not missing value then
-                            set trackArtist to (artist of current track as text)
-                        end if
-                    end try
-                    set curPos to 0
-                    try
-                        if (player position) is not missing value then
-                            set curPos to (player position)
-                        end if
-                    end try
-                    set curDur to 0
-                    try
-                        if (duration of current track) is not missing value then
-                            set curDur to (duration of current track)
-                        end if
-                    end try
-                    return "MusicNative|" & trackName & "|" & trackArtist & "|" & pState & "|none|" & curPos & "|" & curDur & "|applemusic"
-                end tell
-            end try
-            """
-            if let res = runIsolatedAppleScript(src), res.contains("|playing|") {
-                executeScriptAndParse(res)
-                return
-            }
-        }
-
-        // Browser scrapers
-        let hasBrave = runningApps.contains { app in
-            let bid = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            return bid.localizedCaseInsensitiveContains("brave") || name.localizedCaseInsensitiveContains("brave") || bid.localizedCaseInsensitiveContains("agimnkijcaahngcdmfeangaknmldooml")
-        }
-        let hasChrome = runningApps.contains { app in
-            let bid = app.bundleIdentifier ?? ""
-            let name = app.localizedName ?? ""
-            return bid.localizedCaseInsensitiveContains("chrome") || name.localizedCaseInsensitiveContains("chrome")
-        }
-        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("thebrowser") }
-        let hasSafari = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("safari") }
-        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("edge") }
-
-        let chromiumBrowsers = [
-            ("Brave Browser", hasBrave, "Brave"),
-            ("Google Chrome", hasChrome, "Chrome"),
-            ("Arc", hasArc, "Arc"),
-            ("Microsoft Edge", hasEdge, "Edge")
-        ]
-
-        let rawScraper = """
+    // MARK: - Browser Scraper JS
+    // IMPORTANT: No bare 'ytPlayer' variable references; all undefined-risk vars
+    // are declared with 'var' before use. This prevents JS exceptions in non-YT tabs.
+    private var browserScraperJS: String {
+        // We use single-backslash in Swift string, the escaping happens in checkFallbacks()
+        return #"""
         (function() {
-            var videos = Array.from(document.querySelectorAll('video'));
-            var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
-            var a = document.querySelector('audio');
-            var media = v || a;
             var url = window.location.href;
             var track = '', artist = '', isPlaying = 'paused', imgUrl = '', curPos = 0, curDur = 0;
+            var service = 'other';
 
-            var isVideoPlaying = false;
-            if (v) {
-                isVideoPlaying = (!v.paused && !v.ended && v.currentTime > 0 && v.readyState > 1);
-            } else if (a) {
-                isVideoPlaying = (!a.paused && !a.ended);
+            function isMediaPlaying(el) {
+                if (!el) return false;
+                return (!el.paused && !el.ended && el.currentTime > 0 && el.readyState > 1);
             }
-            if (ytPlayer && ytPlayer.classList.contains('paused-mode')) {
-                isVideoPlaying = false;
+            function findActiveVideo() {
+                var videos = Array.from(document.querySelectorAll('video'));
+                return videos.find(function(x) { return isMediaPlaying(x); })
+                    || document.querySelector('.html5-main-video')
+                    || videos[0]
+                    || null;
+            }
+            function findActiveAudio() {
+                var audios = Array.from(document.querySelectorAll('audio'));
+                return audios.find(function(x) { return !x.paused && !x.ended; }) || null;
+            }
+            function parseTimeStr(s) {
+                var p = (s || '').trim().split(':').map(Number);
+                if (p.length === 2) return p[0]*60 + p[1];
+                if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
+                return 0;
+            }
+            function getText(el) {
+                if (!el) return '';
+                return (el.innerText || el.textContent || '').trim();
             }
 
-            if (url.includes('music.youtube.com')) {
-                var titleEl = document.querySelector('.title.ytmusic-player-bar');
-                track = titleEl ? titleEl.textContent.trim() : document.title.replace(/ - YouTube Music$/, '');
-                var artEl = document.querySelector('.ytmusic-player-bar .byline a, .ytmusic-player-bar .byline, .ytmusic-player-bar .subtitle');
-                artist = artEl ? artEl.textContent.trim() : 'YouTube Music';
-                var imgEl = document.querySelector('.ytmusic-player-bar .image, .ytmusic-player-bar img');
-                if (imgEl && imgEl.src) imgUrl = imgEl.src;
-                isPlaying = isVideoPlaying ? 'playing' : 'paused';
-            } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
-                var titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string, ytd-watch-flexy h1, .ytp-title-link, .title.ytd-video-primary-info-renderer');
-                track = titleEl ? (titleEl.textContent || titleEl.innerText).trim() : document.title.replace(/ - YouTube$/, '');
-                var artEl = document.querySelector('#owner ytd-channel-name yt-formatted-string, #upload-info ytd-channel-name yt-formatted-string, ytd-channel-name a, #channel-name a');
-                artist = artEl ? (artEl.textContent || artEl.innerText).trim() : 'YouTube';
-                isPlaying = isVideoPlaying ? 'playing' : 'paused';
-            } else if (url.includes('spotify.com')) {
-                var t = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget"] [data-testid="context-item-link"], a[data-testid="context-item-info-title"]');
-                var art = document.querySelector('[data-testid="context-item-info-subtitles"], [data-testid="now-playing-widget"] [data-testid="context-item-info-subtitles"], [data-testid="context-item-info-artist"]');
-                var pb = document.querySelector('[data-testid="control-button-playpause"], button[data-testid="control-button-playpause"], button[aria-label="Pause"], button[aria-label="Play"]');
-                var img = document.querySelector('img[data-testid="cover-art-image"]') || document.querySelector('img[data-testid="context-item-image"]') || document.querySelector('[data-testid="now-playing-widget"] img');
-                if (t && (t.innerText || t.textContent)) {
-                    track = (t.innerText || t.textContent).trim();
-                    if (art) {
-                        artist = (art.innerText || art.textContent || '').replace(/[\\r\\n]+/g, ', ').trim();
-                    }
-                    if (pb) {
-                        var label = pb.getAttribute('aria-label') || '';
-                        isPlaying = (label.toLowerCase().indexOf('pause') !== -1) ? 'playing' : 'paused';
-                    } else if (v) {
-                        isPlaying = (!v.paused && !v.ended) ? 'playing' : 'paused';
-                    }
-                    imgUrl = img ? img.src : '';
+            var v = findActiveVideo();
+            var a = findActiveAudio();
+            var media = v || a;
+
+            if (url.indexOf('music.youtube.com') !== -1) {
+                service = 'youtube';
+                var ytmTitleEl = document.querySelector('.title.ytmusic-player-bar, yt-formatted-string.title.ytmusic-player-bar');
+                track = ytmTitleEl ? getText(ytmTitleEl) : document.title.replace(/ - YouTube Music$/, '').trim();
+                var ytmArtistEl = document.querySelector('.ytmusic-player-bar .byline a:first-child, .ytmusic-player-bar .subtitle a, .ytmusic-player-bar .byline');
+                artist = ytmArtistEl ? getText(ytmArtistEl) : 'YouTube Music';
+                var ytmImgEl = document.querySelector('.ytmusic-player-bar img.image, .thumbnail-wrapper img, ytmusic-player-bar img');
+                if (ytmImgEl && ytmImgEl.src) imgUrl = ytmImgEl.src;
+                var ytmPlayBtn = document.querySelector('.play-pause-button.ytmusic-player-bar, #play-pause-button');
+                if (v) {
+                    isPlaying = isMediaPlaying(v) ? 'playing' : 'paused';
+                } else if (ytmPlayBtn) {
+                    var ytmLabel = (ytmPlayBtn.getAttribute('aria-label') || '').toLowerCase();
+                    isPlaying = (ytmLabel.indexOf('pause') !== -1) ? 'playing' : 'paused';
                 }
-                
-                function parseTimeStr(s) {
-                    var p = (s || '').trim().split(':').map(Number);
-                    if (p.length === 2) return p[0]*60 + p[1];
-                    if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
-                    return 0;
+
+            } else if (url.indexOf('youtube.com') !== -1 || url.indexOf('youtu.be') !== -1) {
+                service = 'youtube';
+                var ytTitleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string, .ytp-title-link, h1.title');
+                track = ytTitleEl ? getText(ytTitleEl) : document.title.replace(/ - YouTube$/, '').trim();
+                var ytArtistEl = document.querySelector('#owner ytd-channel-name yt-formatted-string a, ytd-channel-name a, #channel-name a');
+                artist = ytArtistEl ? getText(ytArtistEl) : 'YouTube';
+
+                // Strict play state using video element + player container
+                var ytPlayerEl = document.querySelector('.html5-video-player');
+                if (v) {
+                    var strictPlaying = isMediaPlaying(v);
+                    if (ytPlayerEl && ytPlayerEl.classList.contains('paused-mode')) {
+                        strictPlaying = false;
+                    }
+                    isPlaying = strictPlaying ? 'playing' : 'paused';
+                } else {
+                    isPlaying = 'paused';
                 }
-                var curEl = document.querySelector('[data-testid="playback-position"]');
-                var durEl = document.querySelector('[data-testid="playback-duration"]');
-                if (curEl && durEl && curEl.textContent && durEl.textContent) {
-                    curPos = parseTimeStr(curEl.textContent);
-                    curDur = parseTimeStr(durEl.textContent);
+
+                // Thumbnail from video ID
+                var ytVideoId = '';
+                try {
+                    var sp = new URLSearchParams(window.location.search);
+                    if (sp.has('v')) ytVideoId = sp.get('v');
+                } catch(e2) {}
+                if (!ytVideoId && url.indexOf('/shorts/') !== -1) {
+                    var shortParts = url.split('/shorts/');
+                    if (shortParts.length > 1) ytVideoId = shortParts[1].split('?')[0].split('/')[0];
+                }
+                if (!ytVideoId && url.indexOf('youtu.be/') !== -1) {
+                    var shParts = url.split('youtu.be/');
+                    if (shParts.length > 1) ytVideoId = shParts[1].split('?')[0].split('/')[0];
+                }
+                if (ytVideoId) imgUrl = 'https://i.ytimg.com/vi/' + ytVideoId + '/hqdefault.jpg';
+
+            } else if (url.indexOf('spotify.com') !== -1) {
+                service = 'spotify';
+                var spTitleEl = document.querySelector('[data-testid="context-item-link"], a[data-testid="context-item-info-title"]');
+                if (!spTitleEl) spTitleEl = document.querySelector('[data-testid="now-playing-widget"] a');
+                track = spTitleEl ? getText(spTitleEl) : '';
+
+                var spArtistEl = document.querySelector('[data-testid="context-item-info-subtitles"] a, [data-testid="context-item-info-artist"]');
+                if (!spArtistEl) spArtistEl = document.querySelector('[data-testid="now-playing-widget"] [data-testid="context-item-info-subtitles"]');
+                if (spArtistEl) {
+                    artist = getText(spArtistEl).replace(/[\r\n]+/g, ', ').trim();
+                }
+
+                var spPlayBtn = document.querySelector('button[data-testid="control-button-playpause"], [data-testid="control-button-playpause"]');
+                if (spPlayBtn) {
+                    var spLabel = (spPlayBtn.getAttribute('aria-label') || '').toLowerCase();
+                    isPlaying = (spLabel.indexOf('pause') !== -1) ? 'playing' : 'paused';
+                } else if (v) {
+                    isPlaying = (!v.paused && !v.ended) ? 'playing' : 'paused';
+                } else if (a) {
+                    isPlaying = (!a.paused && !a.ended) ? 'playing' : 'paused';
+                }
+
+                var spImgEl = document.querySelector('img[data-testid="cover-art-image"], img[data-testid="context-item-image"]');
+                if (!spImgEl) spImgEl = document.querySelector('[data-testid="now-playing-widget"] img');
+                if (spImgEl && spImgEl.src) {
+                    imgUrl = spImgEl.src;
+                } else {
+                    var spOgImg = document.querySelector('meta[property="og:image"]');
+                    if (spOgImg) imgUrl = spOgImg.getAttribute('content') || '';
+                }
+
+                var spCurEl = document.querySelector('[data-testid="playback-position"]');
+                var spDurEl = document.querySelector('[data-testid="playback-duration"]');
+                if (spCurEl && spDurEl && spCurEl.textContent && spDurEl.textContent) {
+                    curPos = parseTimeStr(spCurEl.textContent);
+                    curDur = parseTimeStr(spDurEl.textContent);
                 }
                 if (!curPos && !curDur) {
-                    var inp = document.querySelector('[data-testid="playback-progressbar"] input');
-                    if (inp) {
-                        curPos = Math.round(Number(inp.value) / 1000);
-                        curDur = Math.round(Number(inp.max) / 1000);
+                    var spInp = document.querySelector('[data-testid="playback-progressbar"] input');
+                    if (spInp) {
+                        curPos = Math.round(Number(spInp.value) / 1000);
+                        curDur = Math.round(Number(spInp.max) / 1000);
                     }
                 }
-            } else if (url.includes('music.apple.com')) {
-                var titleEl = document.querySelector('.web-chrome-playback-lcd__sub-copy-scroll-inner-text-wrapper, [data-testid="lcd-song-title"], .lcd-label__primary');
-                track = titleEl ? (titleEl.textContent || titleEl.innerText).trim() : document.title.replace(/ - Apple Music$/, '');
-                var artEl = document.querySelector('.web-chrome-playback-lcd__sub-copy-scroll-inner-text-wrapper a, [data-testid="lcd-artist-name"], .lcd-label__secondary');
-                artist = artEl ? (artEl.textContent || artEl.innerText).trim() : 'Apple Music';
-                var imgEl = document.querySelector('.web-chrome-playback-lcd__artwork img, [data-testid="lcd-artwork"] img, .media-artwork-v2 img, [data-testid="artwork-component"] img');
-                if (imgEl && imgEl.src) imgUrl = imgEl.src;
+
+            } else if (url.indexOf('music.apple.com') !== -1) {
+                service = 'applemusic';
+                var amTitleEl = document.querySelector('.web-chrome-playback-lcd__sub-copy-scroll-inner-text-wrapper, [data-testid="lcd-song-title"], .lcd-label__primary');
+                track = amTitleEl ? getText(amTitleEl) : document.title.replace(/ - Apple Music$/, '').trim();
+                var amArtistEl = document.querySelector('.web-chrome-playback-lcd__sub-copy-scroll-inner-text-wrapper a, [data-testid="lcd-artist-name"], .lcd-label__secondary');
+                artist = amArtistEl ? getText(amArtistEl) : 'Apple Music';
+                var amImgEl = document.querySelector('.web-chrome-playback-lcd__artwork img, [data-testid="lcd-artwork"] img, .media-artwork-v2 img');
+                if (amImgEl && amImgEl.src) imgUrl = amImgEl.src;
                 if (!imgUrl) {
-                    var srcEl = document.querySelector('.web-chrome-playback-lcd__artwork source, [data-testid="lcd-artwork"] source');
-                    if (srcEl && srcEl.srcset) {
-                        var parts = srcEl.srcset.split(',');
-                        imgUrl = parts[parts.length - 1].trim().split(' ')[0];
+                    var amSrcEl = document.querySelector('.web-chrome-playback-lcd__artwork source, [data-testid="lcd-artwork"] source');
+                    if (amSrcEl && amSrcEl.srcset) {
+                        var amParts2 = amSrcEl.srcset.split(',');
+                        imgUrl = amParts2[amParts2.length - 1].trim().split(' ')[0];
                     }
                 }
-                var pb = document.querySelector('.web-chrome-playback-controls__play-pause-btn, [data-testid="play-pause-button"]');
-                isPlaying = (v && !v.paused && !v.ended) ? 'playing' : (pb && pb.getAttribute('aria-label') === 'Pause' ? 'playing' : 'paused');
-            } else if (url.includes('netflix.com')) {
-                var titleEl = document.querySelector('[data-uia="video-title"], .video-title, [data-uia="watch-video-title"], .ellipsize-js');
-                var showName = '';
-                var episodeName = '';
-                if (titleEl) {
-                    var h4 = titleEl.querySelector('h4');
-                    var spans = Array.from(titleEl.querySelectorAll('span')).map(function(s) { return (s.textContent || s.innerText || '').trim(); }).filter(Boolean);
-                    if (h4) {
-                        showName = (h4.textContent || h4.innerText || '').trim();
-                        if (spans.length > 0) episodeName = spans.join(' - ');
-                    } else if (spans.length > 0) {
-                        showName = spans[0];
-                        if (spans.length > 1) episodeName = spans.slice(1).join(' - ');
+                var amPlayBtn = document.querySelector('.web-chrome-playback-controls__play-pause-btn, [data-testid="play-pause-button"]');
+                if (v && isMediaPlaying(v)) {
+                    isPlaying = 'playing';
+                } else if (a && !a.paused && !a.ended) {
+                    isPlaying = 'playing';
+                } else if (amPlayBtn) {
+                    var amLabel2 = (amPlayBtn.getAttribute('aria-label') || '').toLowerCase();
+                    isPlaying = (amLabel2.indexOf('pause') !== -1) ? 'playing' : 'paused';
+                }
+
+            } else if (url.indexOf('netflix.com') !== -1) {
+                service = 'netflix';
+                var nfTitleEl = document.querySelector('[data-uia="video-title"], .video-title, [data-uia="watch-video-title"]');
+                var showName = '', episodeName = '';
+                if (nfTitleEl) {
+                    var h4el = nfTitleEl.querySelector('h4');
+                    var nfSpans = Array.from(nfTitleEl.querySelectorAll('span')).map(function(s) { return getText(s); }).filter(Boolean);
+                    if (h4el) {
+                        showName = getText(h4el);
+                        if (nfSpans.length > 0) episodeName = nfSpans.join(' - ');
+                    } else if (nfSpans.length > 0) {
+                        showName = nfSpans[0];
+                        if (nfSpans.length > 1) episodeName = nfSpans.slice(1).join(' - ');
                     } else {
-                        showName = (titleEl.textContent || titleEl.innerText || '').trim();
+                        showName = getText(nfTitleEl);
                     }
                 }
                 if (!showName && document.title) showName = document.title.trim();
-                showName = showName.replace(/^Watch\\s+/i, '').replace(/\\s*[\\|\\-–—]\\s*Netflix.*$/i, '').trim();
+                showName = showName.replace(/^Watch\s+/i, '').replace(/\s*[\|\-\u2013\u2014]\s*Netflix.*$/i, '').trim();
                 track = showName || 'Netflix';
                 artist = episodeName || 'Netflix';
                 if (v) isPlaying = (!v.paused && !v.ended) ? 'playing' : 'paused';
             }
 
-            if (media && !url.includes('spotify.com')) {
+            if (media && service !== 'spotify') {
                 curPos = media.currentTime || 0;
-                curDur = (isFinite(media.duration) && media.duration) ? media.duration : 0;
+                curDur = (isFinite(media.duration) && media.duration > 0) ? media.duration : 0;
             }
-
-            if (!imgUrl && (url.includes('youtube.com') || url.includes('youtu.be'))) {
-                var videoId = '';
-                try {
-                    var p = new URLSearchParams(window.location.search);
-                    if (p.has('v')) videoId = p.get('v');
-                } catch(e) {}
-                if (!videoId && url.includes('/shorts/')) {
-                    var parts = url.split('/shorts/');
-                    if (parts.length > 1) videoId = parts[1].split('?')[0].split('/')[0];
-                }
-                if (videoId) {
-                    imgUrl = 'https://i.ytimg.com/vi/' + videoId + '/hqdefault.jpg';
-                }
-            }
-
-            var service = 'other';
-            if (url.includes('youtube.com') || url.includes('youtu.be') || url.includes('music.youtube.com')) service = 'youtube';
-            else if (url.includes('spotify.com')) service = 'spotify';
-            else if (url.includes('netflix.com')) service = 'netflix';
-            else if (url.includes('music.apple.com')) service = 'applemusic';
 
             if (track) {
                 return track.trim() + '|' + artist.trim() + '|' + isPlaying + '|' + (imgUrl || 'none') + '|' + Math.round(curPos) + '|' + Math.round(curDur) + '|' + service;
             }
             return 'null';
         })();
-        """
+        """#
+    }
+    
+    private func checkFallbacks() {
+        let runningApps = NSWorkspace.shared.runningApplications
+        
+        // 1. Native Spotify
+        let hasSpotify = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
+        if hasSpotify {
+            let src = """
+            try
+                tell application id "com.spotify.client"
+                    set pState to (player state as string)
+                    if pState is "playing" then
+                        set trackName to (name of current track as text)
+                        set trackArtist to (artist of current track as text)
+                        set curPos to (player position)
+                        set curDur to (duration of current track) / 1000
+                        set trackArt to "none"
+                        try
+                            set trackArt to (artwork url of current track as text)
+                        end try
+                        return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|" & trackArt & "|" & curPos & "|" & curDur & "|spotify"
+                    end if
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src), res.contains("|playing|") {
+                executeScriptAndParse(res)
+                return
+            }
+        }
 
-        let escapedScraper = rawScraper
+        // 2. Native Apple Music
+        let hasMusic = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
+        if hasMusic {
+            let src = """
+            try
+                tell application id "com.apple.Music"
+                    set pState to (player state as string)
+                    if pState is "playing" then
+                        set trackName to ""
+                        try
+                            set trackName to (name of current track as text)
+                        end try
+                        set trackArtist to ""
+                        try
+                            if (artist of current track) is not missing value then
+                                set trackArtist to (artist of current track as text)
+                            end if
+                        end try
+                        set curPos to 0
+                        try
+                            if (player position) is not missing value then
+                                set curPos to (player position)
+                            end if
+                        end try
+                        set curDur to 0
+                        try
+                            if (duration of current track) is not missing value then
+                                set curDur to (duration of current track)
+                            end if
+                        end try
+                        return "MusicNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|applemusic"
+                    end if
+                end tell
+            end try
+            """
+            if let res = runIsolatedAppleScript(src), res.contains("|playing|") {
+                executeScriptAndParse(res)
+                return
+            }
+        }
+
+        // 3. Browser scraping
+        let scraperJS = browserScraperJS
+        let escapedScraper = scraperJS
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+
+        let hasBrave = runningApps.contains { app in
+            let bid = app.bundleIdentifier ?? ""
+            let name = app.localizedName ?? ""
+            return bid.hasPrefix("com.brave") || name.localizedCaseInsensitiveContains("brave")
+        }
+        let hasChrome = runningApps.contains { app in
+            let bid = app.bundleIdentifier ?? ""
+            return bid.hasPrefix("com.google.Chrome") || (app.localizedName ?? "").localizedCaseInsensitiveContains("google chrome")
+        }
+        let hasArc = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("thebrowser") }
+        let hasSafari = runningApps.contains { app in
+            let bid = app.bundleIdentifier ?? ""
+            return bid == "com.apple.Safari" || bid == "com.apple.SafariTechnologyPreview"
+        }
+        let hasEdge = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("edgemac") }
+
+        let chromiumBrowsers = [
+            ("Brave Browser", hasBrave, "Brave"),
+            ("Google Chrome", hasChrome, "Chrome"),
+            ("Arc", hasArc, "Arc"),
+            ("Microsoft Edge", hasEdge, "Edge")
+        ] as [(String, Bool, String)]
 
         for (appName, isRunning, tag) in chromiumBrowsers where isRunning {
             let src = """
@@ -457,7 +508,7 @@ final class MediaManager: ObservableObject {
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com") then
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
                                 try
                                     set res to execute t javascript webScraper
                                     if res is not missing value and res is not "null" then
@@ -484,6 +535,7 @@ final class MediaManager: ObservableObject {
             }
         }
 
+        // Safari
         if hasSafari {
             let src = """
             set webScraper to "\(escapedScraper)"
@@ -493,7 +545,7 @@ final class MediaManager: ObservableObject {
                     repeat with win in every window
                         repeat with t in every tab of win
                             set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com") then
+                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
                                 try
                                     set res to do JavaScript webScraper in t
                                     if res is not missing value and res is not "null" then
@@ -519,8 +571,63 @@ final class MediaManager: ObservableObject {
                 return
             }
         }
+        
+        // 4. Brave PWA processes
+        if let pwaResult = scrapeBravePWAProcesses(escapedScraper: escapedScraper) {
+            executeScriptAndParse(pwaResult)
+            return
+        }
 
         setNotPlaying()
+    }
+    
+    // MARK: - Brave PWA scraping
+    // Brave PWAs (YouTube, Spotify, etc.) run as separate processes with bundle IDs
+    // like "com.brave.Browser.app.<hash>". Normal browser tab iteration doesn't reach them.
+    private func scrapeBravePWAProcesses(escapedScraper: String) -> String? {
+        let runningApps = NSWorkspace.shared.runningApplications
+        let pwaApps = runningApps.filter { app in
+            let bid = app.bundleIdentifier ?? ""
+            return bid.hasPrefix("com.brave.Browser.app.") || bid.hasPrefix("com.google.Chrome.app.")
+        }
+        guard !pwaApps.isEmpty else { return nil }
+        
+        for pwaApp in pwaApps {
+            let appName = pwaApp.localizedName ?? ""
+            let pid = pwaApp.processIdentifier
+            
+            let script = """
+            tell application "System Events"
+                set pwaProcess to first process whose unix id is \(pid)
+                set pwaName to name of pwaProcess
+            end tell
+            try
+                tell application pwaName
+                    set webScraper to "\(escapedScraper)"
+                    repeat with win in every window
+                        try
+                            repeat with t in every tab of win
+                                try
+                                    set res to execute t javascript webScraper
+                                    if res is not missing value and res is not "null" then
+                                        return "\(appName)|" & res
+                                    end if
+                                on error
+                                end try
+                            end repeat
+                        on error
+                        end try
+                    end repeat
+                end tell
+            on error
+            end try
+            """
+            
+            if let res = runIsolatedAppleScript(script), !res.isEmpty, res != "null" {
+                return res
+            }
+        }
+        return nil
     }
     
     // MARK: - MediaRemote Parsing
@@ -552,35 +659,26 @@ final class MediaManager: ObservableObject {
         var artist = rawArtist
         var service: MediaService = .other
         
-        // Comprehensive service identification
-        let isYouTube = clientDisplayName.localizedCaseInsensitiveContains("YouTube") ||
+        let isYouTubeService = clientDisplayName.localizedCaseInsensitiveContains("YouTube") ||
                         appName.localizedCaseInsensitiveContains("YouTube") ||
                         fullBundleId.localizedCaseInsensitiveContains("youtube") ||
                         fullBundleId.localizedCaseInsensitiveContains("agimnkijcaahngcdmfeangaknmldooml") ||
                         fullBundleId.localizedCaseInsensitiveContains("cinhimbnkkaohjvfdleckmgagpcbmegf") ||
-                        title.localizedCaseInsensitiveContains("YouTube") ||
-                        artist.localizedCaseInsensitiveContains("YouTube") ||
                         rawAlbum.localizedCaseInsensitiveContains("YouTube")
         
-        let isNetflix = clientDisplayName.localizedCaseInsensitiveContains("Netflix") ||
+        let isNetflixService = clientDisplayName.localizedCaseInsensitiveContains("Netflix") ||
                         appName.localizedCaseInsensitiveContains("Netflix") ||
                         fullBundleId.localizedCaseInsensitiveContains("netflix") ||
-                        title.localizedCaseInsensitiveContains("Netflix") ||
-                        artist.localizedCaseInsensitiveContains("Netflix") ||
                         rawAlbum.localizedCaseInsensitiveContains("Netflix")
         
-        let isSpotify = clientDisplayName.localizedCaseInsensitiveContains("Spotify") ||
+        let isSpotifyService = clientDisplayName.localizedCaseInsensitiveContains("Spotify") ||
                         appName.localizedCaseInsensitiveContains("Spotify") ||
                         fullBundleId.localizedCaseInsensitiveContains("spotify") ||
-                        fullBundleId.localizedCaseInsensitiveContains("pjibgflleapemflmbggkgajjjonlganj") ||
-                        title.localizedCaseInsensitiveContains("Spotify") ||
-                        artist.localizedCaseInsensitiveContains("Spotify")
+                        fullBundleId.localizedCaseInsensitiveContains("pjibgflleapemflmbggkgajjjonlganj")
         
-        let isAppleMusic = clientDisplayName.localizedCaseInsensitiveContains("Music") ||
-                           appName == "Music" ||
-                           fullBundleId == "com.apple.Music"
+        let isAppleMusicService = (clientDisplayName == "Music" || appName == "Music" || fullBundleId == "com.apple.Music")
         
-        if isYouTube {
+        if isYouTubeService {
             service = .youtube
             title = title
                 .replacingOccurrences(of: " - YouTube", with: "", options: .caseInsensitive)
@@ -589,7 +687,7 @@ final class MediaManager: ObservableObject {
             if artist.isEmpty || artist == appName {
                 artist = rawAlbum.isEmpty ? "YouTube" : rawAlbum
             }
-        } else if isNetflix {
+        } else if isNetflixService {
             service = .netflix
             title = title
                 .replacingOccurrences(of: " - Netflix", with: "", options: .caseInsensitive)
@@ -602,28 +700,37 @@ final class MediaManager: ObservableObject {
             if artist.isEmpty {
                 artist = rawAlbum.isEmpty ? "Netflix" : rawAlbum
             }
-        } else if isSpotify {
+        } else if isSpotifyService {
             service = .spotify
-        } else if isAppleMusic {
+        } else if isAppleMusicService {
             service = .appleMusic
         } else {
             service = .other
         }
         
+        // If we can't identify the service and not playing, fall through to browser fallbacks
+        if !isPlayingBool && service == .other {
+            return false
+        }
+        
         // Artwork extraction
         var artwork: NSImage? = nil
-        if let artData = d["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data, let img = NSImage(data: artData) {
+        if let artData = d["kMRMediaRemoteNowPlayingInfoArtworkData"] as? Data, !artData.isEmpty, let img = NSImage(data: artData) {
             artwork = img
         }
         
         if service == .youtube {
-            let cacheKey = "yt_" + title
-            if let cached = Self.artworkCache.object(forKey: cacheKey as NSString) {
+            let cacheKey = "yt_\(title)" as NSString
+            if let cached = Self.artworkCache.object(forKey: cacheKey) {
                 artwork = cached
             } else if let art = artwork {
-                Self.artworkCache.setObject(art, forKey: cacheKey as NSString)
-            } else if let ytThumbUrl = self.fetchYouTubeThumbnailUrl() {
-                self.fetchAndCacheImage(from: ytThumbUrl, cacheKey: cacheKey)
+                Self.artworkCache.setObject(art, forKey: cacheKey)
+            } else {
+                DispatchQueue.global(qos: .background).async { [weak self] in
+                    if let ytThumbUrl = self?.fetchYouTubeThumbnailUrl() {
+                        self?.fetchAndCacheImage(from: ytThumbUrl, cacheKey: cacheKey as String)
+                    }
+                }
             }
         }
         
@@ -633,7 +740,7 @@ final class MediaManager: ObservableObject {
         let finalPos = duration > 0 ? min(calculatedPos, duration) : calculatedPos
         
         let isNativeMusicRunning = NSWorkspace.shared.runningApplications.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
-        if (isAppleMusic || service == .appleMusic || appName == "Music" || fullBundleId == "com.apple.Music") && isNativeMusicRunning {
+        if service == .appleMusic && isNativeMusicRunning {
             if finalDuration <= 0 || self.duration <= 0 {
                 let (_, musicDur) = self.fetchAppleMusicPositionAndDuration()
                 if musicDur > 0 {
@@ -650,6 +757,7 @@ final class MediaManager: ObservableObject {
         let finalService = service
         let finalArtwork = artwork
         let finalAppName = appName
+        let finalBundleId = fullBundleId
         
         Task { @MainActor in
             self.consecutiveNotPlayingCount = 0
@@ -672,7 +780,7 @@ final class MediaManager: ObservableObject {
             if let artwork = finalArtwork {
                 self.artworkImage = artwork
             } else if finalService != .youtube || self.artworkImage == nil {
-                self.loadAppIcon(for: self.currentSource, bundleId: fullBundleId)
+                self.loadAppIcon(for: self.currentSource, bundleId: finalBundleId)
             }
         }
         return true
@@ -681,7 +789,6 @@ final class MediaManager: ObservableObject {
     private func fetchAppleMusicPositionAndDuration() -> (Double, Double) {
         let isMusicRunning = NSWorkspace.shared.runningApplications.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
         guard isMusicRunning else { return (0, 0) }
-        
         let scriptSrc = """
         try
             tell application id "com.apple.Music"
@@ -718,12 +825,10 @@ final class MediaManager: ObservableObject {
     private func getOrFetchAppleMusicArtwork(for title: String, artist: String) -> NSImage? {
         let isMusicRunning = NSWorkspace.shared.runningApplications.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
         guard isMusicRunning else { return nil }
-        
         let cacheKey = "AppleMusic_\(title)_\(artist)" as NSString
         if let cached = Self.artworkCache.object(forKey: cacheKey) {
             return cached
         }
-        
         let scriptSrc = """
         try
             tell application id "com.apple.Music"
@@ -761,18 +866,15 @@ final class MediaManager: ObservableObject {
             let newCurPos = parts.count >= 6 ? (Double(parts[5]) ?? 0) : 0
             let newDuration = parts.count >= 7 ? (Double(parts[6]) ?? 0) : 0
             
-            let newIsYouTube = imgUrlString.contains("youtube.com") || imgUrlString.contains("ytimg.com") || imgUrlString.contains("youtu.be") || sourceApp.contains("YouTube")
-            let newIsNetflix = sourceApp.localizedCaseInsensitiveContains("Netflix") || imgUrlString.contains("netflix.com") || imgUrlString.contains("nflxso.net") || imgUrlString.contains("nflxext.com")
-            
             let serviceTag = parts.count >= 8 ? parts[7].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : ""
             let newService: MediaService
-            if serviceTag == "spotify" || sourceApp == "SpotifyNative" || imgUrlString.contains("spotify.com") {
+            if serviceTag == "spotify" || sourceApp == "SpotifyNative" || imgUrlString.contains("spotify") || imgUrlString.contains("scdn.co") {
                 newService = .spotify
-            } else if serviceTag == "youtube" || newIsYouTube {
+            } else if serviceTag == "youtube" || imgUrlString.contains("youtube.com") || imgUrlString.contains("ytimg.com") || sourceApp.localizedCaseInsensitiveContains("youtube") {
                 newService = .youtube
             } else if serviceTag == "applemusic" || sourceApp == "MusicNative" {
                 newService = .appleMusic
-            } else if serviceTag == "netflix" || newIsNetflix {
+            } else if serviceTag == "netflix" || imgUrlString.contains("netflix") || imgUrlString.contains("nflxso") {
                 newService = .netflix
             } else {
                 newService = .other
@@ -781,13 +883,13 @@ final class MediaManager: ObservableObject {
             Task { @MainActor in
                 self.consecutiveNotPlayingCount = 0
                 self.currentSource = sourceApp
+                let titleChanged = (self.title != newTitle)
                 self.title = newTitle
                 self.artist = newArtist
                 self.isPlaying = newIsPlaying
                 self.isYouTube = newService == .youtube
                 self.isNetflix = newService == .netflix
                 self.mediaService = newService
-                let titleChanged = (self.title != newTitle)
                 if !self.isScrubbing && Date() >= self.seekLockUntil {
                     if titleChanged {
                         self.currentTime = newCurPos
@@ -817,11 +919,23 @@ final class MediaManager: ObservableObject {
                         }
                     }
                 } else if newService == .appleMusic || sourceApp == "MusicNative" {
-                    if let appleMusicArt = self.getOrFetchAppleMusicArtwork(for: newTitle, artist: newArtist) {
-                        self.artworkImage = appleMusicArt
-                    } else {
-                        self.lastArtworkURL = ""
-                        self.loadAppIcon(for: sourceApp)
+                    DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                        guard let self = self else { return }
+                        if let appleMusicArt = self.getOrFetchAppleMusicArtwork(for: newTitle, artist: newArtist) {
+                            Task { @MainActor in self.artworkImage = appleMusicArt }
+                        } else {
+                            Task { @MainActor in
+                                self.lastArtworkURL = ""
+                                self.loadAppIcon(for: sourceApp)
+                            }
+                        }
+                    }
+                } else if newService == .youtube && imgUrlString == "none" {
+                    DispatchQueue.global(qos: .background).async { [weak self] in
+                        guard let self = self else { return }
+                        if let thumbUrl = self.fetchYouTubeThumbnailUrl() {
+                            self.fetchAndCacheImage(from: thumbUrl, cacheKey: "yt_\(newTitle)")
+                        }
                     }
                 } else {
                     self.lastArtworkURL = ""
@@ -854,13 +968,13 @@ final class MediaManager: ObservableObject {
             resolvedBundleId = "com.spotify.client"
         } else if sourceApp == "MusicNative" || sourceApp == "Music" {
             resolvedBundleId = "com.apple.Music"
-        } else if sourceApp == "Brave" || sourceApp.contains("Brave") {
+        } else if sourceApp.localizedCaseInsensitiveContains("Brave") {
             resolvedBundleId = "com.brave.Browser"
-        } else if sourceApp == "Chrome" || sourceApp.contains("Chrome") {
+        } else if sourceApp.localizedCaseInsensitiveContains("Chrome") {
             resolvedBundleId = "com.google.Chrome"
         } else if sourceApp == "Arc" {
             resolvedBundleId = "company.thebrowser.Browser"
-        } else if sourceApp == "Edge" || sourceApp.contains("Edge") {
+        } else if sourceApp.localizedCaseInsensitiveContains("Edge") {
             resolvedBundleId = "com.microsoft.edgemac"
         } else {
             resolvedBundleId = "com.apple.Safari"
@@ -1039,18 +1153,15 @@ final class MediaManager: ObservableObject {
                 let dict: [String: Any] = ["kMRMediaRemoteOptionPlaybackPosition": NSNumber(value: clampedSeconds)]
                 _ = Self.mrSendCommand?(18, dict as CFDictionary)
             } else {
-                // Universal MediaRemote seek for web/other
                 Self.mrSetElapsedTime?(clampedSeconds)
                 if let sendCmd = Self.mrSendCommand {
                     let dict: [String: Any] = ["kMRMediaRemoteOptionPlaybackPosition": NSNumber(value: clampedSeconds)]
                     _ = sendCmd(18, dict as CFDictionary)
                     _ = sendCmd(11, dict as CFDictionary)
                 }
-                // Web browsers seek (YouTube, YouTube Music, Netflix, Spotify Web, HTML5 Video/Audio)
                 self.seekInWebBrowsers(to: clampedSeconds)
             }
             
-            // Delay then sync position from Music.app (for Apple Music) or MediaRemote
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.8) { [weak self] in
                 guard let self = self else { return }
                 if isAppleMusicNative {
@@ -1161,7 +1272,7 @@ final class MediaManager: ObservableObject {
             }
         }
         
-        let isSafariRunning = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("Safari") }
+        let isSafariRunning = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
         if isSafariRunning {
             let script = """
             tell application "Safari"
@@ -1217,7 +1328,6 @@ final class MediaManager: ObservableObject {
             } else if isAppleMusicNative {
                 _ = NSAppleScript(source: "try\ntell application id \"com.apple.Music\" to \(command)\nend try")?.executeAndReturnError(nil)
             } else if isYT && command != "playpause" {
-                // If skipping video on YouTube, seek forward/back 10 seconds
                 if command == "next track", dur > 0 {
                     self.seek(to: min(dur, cur + 10))
                 } else if command == "previous track" {
@@ -1249,7 +1359,7 @@ final class MediaManager: ObservableObject {
         (function() {
             var cmd = '\(command)';
             if (cmd === 'playpause') {
-                var spPlayBtn = document.querySelector('[data-testid="control-button-playpause"], button[data-testid="control-button-playpause"], button[aria-label="Pause"], button[aria-label="Play"], [data-testid="play-button"], button[data-testid="play-button"]');
+                var spPlayBtn = document.querySelector('button[data-testid="control-button-playpause"], [data-testid="control-button-playpause"], button[aria-label="Pause"], button[aria-label="Play"]');
                 var nfPlayBtn = document.querySelector('[data-uia="control-play-pause-play"], [data-uia="control-play-pause-pause"], [data-uia="control-play-pause"], .button-nfVideosPlay, .button-nfVideosPause');
                 var ytPlayBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, .web-chrome-playback-controls__play-pause-btn');
                 if (spPlayBtn) {
@@ -1268,7 +1378,7 @@ final class MediaManager: ObservableObject {
             } else if (cmd === 'next track') {
                 var spNextBtn = document.querySelector('[data-testid="control-button-skip-forward"], button[data-testid="control-button-skip-forward"], button[aria-label="Next"]');
                 var nfForwardBtn = document.querySelector('[data-uia="control-fast-forward"], [data-uia="control-seek-forward"], [data-uia="control-skip-forward"], .button-nfVideosFastForward');
-                var nextBtn = document.querySelector('.ytp-next-button, .next-button.ytmusic-player-bar, [data-testid="control-button-skip-forward"], .web-chrome-playback-controls__forward-btn');
+                var nextBtn = document.querySelector('.ytp-next-button, .next-button.ytmusic-player-bar, .web-chrome-playback-controls__forward-btn');
                 if (spNextBtn) {
                     spNextBtn.click();
                 } else if (nfForwardBtn) {
@@ -1276,16 +1386,16 @@ final class MediaManager: ObservableObject {
                 } else if (nextBtn) {
                     nextBtn.click();
                 } else {
-                    var videos = Array.from(document.querySelectorAll('video, audio'));
-                    var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
-                    if (v && isFinite(v.duration) && v.duration > 0) {
-                        v.currentTime = Math.min(v.duration, v.currentTime + 10);
+                    var videos2 = Array.from(document.querySelectorAll('video, audio'));
+                    var v2 = videos2.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos2[0];
+                    if (v2 && isFinite(v2.duration) && v2.duration > 0) {
+                        v2.currentTime = Math.min(v2.duration, v2.currentTime + 10);
                     }
                 }
             } else if (cmd === 'previous track') {
                 var spPrevBtn = document.querySelector('[data-testid="control-button-skip-back"], button[data-testid="control-button-skip-back"], button[aria-label="Previous"]');
                 var nfRewindBtn = document.querySelector('[data-uia="control-seek-back"], [data-uia="control-fast-rewind"], [data-uia="control-skip-back"], .button-nfVideosRewind');
-                var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, [data-testid="control-button-skip-back"], .web-chrome-playback-controls__backward-btn');
+                var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, .web-chrome-playback-controls__backward-btn');
                 if (spPrevBtn) {
                     spPrevBtn.click();
                 } else if (nfRewindBtn) {
@@ -1293,13 +1403,13 @@ final class MediaManager: ObservableObject {
                 } else if (prevBtn) {
                     prevBtn.click();
                 } else {
-                    var videos = Array.from(document.querySelectorAll('video, audio'));
-                    var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
-                    if (v) {
-                        if (v.currentTime > 3) {
-                            v.currentTime = 0;
+                    var videos3 = Array.from(document.querySelectorAll('video, audio'));
+                    var v3 = videos3.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos3[0];
+                    if (v3) {
+                        if (v3.currentTime > 3) {
+                            v3.currentTime = 0;
                         } else {
-                            v.currentTime = Math.max(0, v.currentTime - 10);
+                            v3.currentTime = Math.max(0, v3.currentTime - 10);
                         }
                     }
                 }
@@ -1347,7 +1457,7 @@ final class MediaManager: ObservableObject {
             }
         }
 
-        let isSafariRunning = runningApps.contains { ($0.bundleIdentifier ?? "").localizedCaseInsensitiveContains("Safari") }
+        let isSafariRunning = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Safari" }
         if isSafariRunning {
             let script = """
             tell application "Safari"
