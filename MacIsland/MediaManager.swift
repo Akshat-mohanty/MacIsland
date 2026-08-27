@@ -392,7 +392,15 @@ final class MediaManager: ObservableObject {
             }
 
             if (track && track.length > 0) {
-                return track.trim() + '|' + artist.trim() + '|' + isPlaying + '|' + (imgUrl || 'none') + '|' + Math.round(curPos) + '|' + Math.round(curDur) + '|' + service;
+                return JSON.stringify({
+                    title: track.trim(),
+                    artist: (artist || '').trim(),
+                    isPlaying: isPlaying === 'playing',
+                    artworkUrl: imgUrl || '',
+                    currentTime: Math.round(curPos),
+                    duration: Math.round(curDur),
+                    service: service
+                });
             }
             return 'null';
         })();
@@ -498,7 +506,7 @@ final class MediaManager: ObservableObject {
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
                                 try
                                     tell t to set res to execute javascript webScraper
-                                    if res is not missing value and res is not "null" and res contains "|playing|" then
+                                    if res is not missing value and res is not "null" and res contains "\\"isPlaying\\":true" then
                                         return "\(tag)|" & res
                                     end if
                                 on error
@@ -527,7 +535,7 @@ final class MediaManager: ObservableObject {
                             if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
                                 try
                                     set res to do JavaScript webScraper in t
-                                    if res is not missing value and res is not "null" and res contains "|playing|" then
+                                    if res is not missing value and res is not "null" and res contains "\\"isPlaying\\":true" then
                                         return "Safari|" & res
                                     end if
                                 on error
@@ -840,11 +848,93 @@ final class MediaManager: ObservableObject {
         return nil
     }
     
+    private struct ScrapedMediaJSON: Decodable {
+        let title: String
+        let artist: String?
+        let isPlaying: Bool?
+        let artworkUrl: String?
+        let currentTime: Double?
+        let duration: Double?
+        let service: String?
+    }
+
     private func executeScriptAndParse(_ resultString: String) {
         guard !resultString.isEmpty else {
             setNotPlaying()
             return
         }
+        
+        var sourceApp = ""
+        var jsonString = resultString
+        
+        if let firstPipe = resultString.firstIndex(of: "|") {
+            let potentialTag = String(resultString[..<firstPipe])
+            let remainder = String(resultString[resultString.index(after: firstPipe)...])
+            if remainder.hasPrefix("{") && remainder.hasSuffix("}") {
+                sourceApp = potentialTag
+                jsonString = remainder
+            }
+        }
+        
+        if jsonString.hasPrefix("{") && jsonString.hasSuffix("}"),
+           let data = jsonString.data(using: .utf8),
+           let info = try? JSONDecoder().decode(ScrapedMediaJSON.self, from: data) {
+            let newTitle = info.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let newArtist = (info.artist ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? (info.service == "youtube" ? "YouTube" : sourceApp) : (info.artist ?? "")
+            let newIsPlaying = info.isPlaying ?? false
+            let imgUrlString = info.artworkUrl ?? ""
+            let newCurPos = info.currentTime ?? 0
+            let newDuration = info.duration ?? 0
+            let serviceTag = (info.service ?? "").lowercased()
+            
+            let newService: MediaService
+            if serviceTag == "spotify" {
+                newService = .spotify
+            } else if serviceTag == "youtube" {
+                newService = .youtube
+            } else if serviceTag == "applemusic" {
+                newService = .appleMusic
+            } else if serviceTag == "netflix" {
+                newService = .netflix
+            } else {
+                newService = .other
+            }
+            
+            Task { @MainActor in
+                self.consecutiveNotPlayingCount = 0
+                self.currentSource = sourceApp.isEmpty ? "Browser" : sourceApp
+                let titleChanged = (self.title != newTitle)
+                self.title = newTitle.isEmpty ? "Unknown" : newTitle
+                self.artist = newArtist
+                self.isPlaying = newIsPlaying
+                self.isYouTube = (newService == .youtube)
+                self.isNetflix = (newService == .netflix)
+                self.mediaService = newService
+                if !self.isScrubbing && Date() >= self.seekLockUntil {
+                    if titleChanged {
+                        self.currentTime = newCurPos
+                    } else if !self.isPlaying || abs(self.currentTime - newCurPos) > 2.0 {
+                        self.currentTime = newCurPos
+                    }
+                }
+                self.duration = newDuration
+                
+                // Artwork Resolution
+                if !imgUrlString.isEmpty && imgUrlString != "none" {
+                    if let cached = Self.artworkCache.object(forKey: imgUrlString as NSString) {
+                        self.artworkImage = cached
+                    } else {
+                        self.fetchAndCacheImage(from: imgUrlString, cacheKey: imgUrlString)
+                    }
+                } else if let cached = Self.artworkCache.object(forKey: "art_\(newTitle)" as NSString) {
+                    self.artworkImage = cached
+                } else if self.artworkImage == nil {
+                    self.loadAppIcon(for: self.currentSource)
+                }
+            }
+            return
+        }
+        
         let parts = resultString.components(separatedBy: "|")
         if parts.count >= 5 {
             let sourceApp = parts[0]
