@@ -309,10 +309,14 @@ final class MediaManager: ObservableObject {
             var url = window.location.href;
             var track = '', artist = '', isPlaying = 'paused', imgUrl = '', curPos = 0, curDur = 0;
 
-            var ytPlayer = document.querySelector('.html5-video-player');
-            var ytPlaying = (ytPlayer && ytPlayer.classList.contains('playing-mode')) || (v && !v.paused && !v.ended && v.currentTime > 0);
-            if (v && v.paused && (!ytPlayer || !ytPlayer.classList.contains('playing-mode'))) {
-                ytPlaying = false;
+            var isVideoPlaying = false;
+            if (v) {
+                isVideoPlaying = (!v.paused && !v.ended && v.currentTime > 0 && v.readyState > 1);
+            } else if (a) {
+                isVideoPlaying = (!a.paused && !a.ended);
+            }
+            if (ytPlayer && ytPlayer.classList.contains('paused-mode')) {
+                isVideoPlaying = false;
             }
 
             if (url.includes('music.youtube.com')) {
@@ -322,13 +326,13 @@ final class MediaManager: ObservableObject {
                 artist = artEl ? artEl.textContent.trim() : 'YouTube Music';
                 var imgEl = document.querySelector('.ytmusic-player-bar .image, .ytmusic-player-bar img');
                 if (imgEl && imgEl.src) imgUrl = imgEl.src;
-                isPlaying = ytPlaying ? 'playing' : 'paused';
+                isPlaying = isVideoPlaying ? 'playing' : 'paused';
             } else if (url.includes('youtube.com') || url.includes('youtu.be')) {
                 var titleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string, ytd-watch-flexy h1, .ytp-title-link, .title.ytd-video-primary-info-renderer');
                 track = titleEl ? (titleEl.textContent || titleEl.innerText).trim() : document.title.replace(/ - YouTube$/, '');
                 var artEl = document.querySelector('#owner ytd-channel-name yt-formatted-string, #upload-info ytd-channel-name yt-formatted-string, ytd-channel-name a, #channel-name a');
                 artist = artEl ? (artEl.textContent || artEl.innerText).trim() : 'YouTube';
-                isPlaying = ytPlaying ? 'playing' : 'paused';
+                isPlaying = isVideoPlaying ? 'playing' : 'paused';
             } else if (url.includes('spotify.com')) {
                 var t = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget"] [data-testid="context-item-link"], a[data-testid="context-item-info-title"]');
                 var art = document.querySelector('[data-testid="context-item-info-subtitles"], [data-testid="now-playing-widget"] [data-testid="context-item-info-subtitles"], [data-testid="context-item-info-artist"]');
@@ -612,6 +616,17 @@ final class MediaManager: ObservableObject {
             artwork = img
         }
         
+        if service == .youtube {
+            let cacheKey = "yt_" + title
+            if let cached = Self.artworkCache.object(forKey: cacheKey as NSString) {
+                artwork = cached
+            } else if let art = artwork {
+                Self.artworkCache.setObject(art, forKey: cacheKey as NSString)
+            } else if let ytThumbUrl = self.fetchYouTubeThumbnailUrl() {
+                self.fetchAndCacheImage(from: ytThumbUrl, cacheKey: cacheKey)
+            }
+        }
+        
         var finalDuration = duration
         let timeSince = Date().timeIntervalSince(timestamp)
         let calculatedPos = max(0, isPlayingBool ? (elapsed + timeSince * (rateVal > 0 ? rateVal : 1.0)) : elapsed)
@@ -656,7 +671,7 @@ final class MediaManager: ObservableObject {
             self.duration = finalDuration
             if let artwork = finalArtwork {
                 self.artworkImage = artwork
-            } else {
+            } else if finalService != .youtube || self.artworkImage == nil {
                 self.loadAppIcon(for: self.currentSource, bundleId: fullBundleId)
             }
         }
@@ -860,6 +875,105 @@ final class MediaManager: ObservableObject {
         }
     }
     
+    private func fetchAndCacheImage(from urlString: String, cacheKey: String) {
+        guard let url = URL(string: urlString) else { return }
+        self.lastArtworkURL = urlString
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8.0
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            guard let self = self, let data = data, let img = NSImage(data: data) else { return }
+            Self.artworkCache.setObject(img, forKey: cacheKey as NSString)
+            Self.artworkCache.setObject(img, forKey: urlString as NSString)
+            Task { @MainActor in
+                if self.lastArtworkURL == urlString || self.artworkImage == nil {
+                    self.artworkImage = img
+                }
+            }
+        }.resume()
+    }
+    
+    private func extractYouTubeVideoId(from url: String) -> String? {
+        if let components = URLComponents(string: url), let queryItems = components.queryItems {
+            if let vItem = queryItems.first(where: { $0.name == "v" }), let vVal = vItem.value, !vVal.isEmpty {
+                return vVal
+            }
+        }
+        if url.contains("/shorts/") {
+            let parts = url.components(separatedBy: "/shorts/")
+            if parts.count > 1 {
+                let id = parts[1].components(separatedBy: "?")[0].components(separatedBy: "/")[0]
+                if !id.isEmpty { return id }
+            }
+        }
+        if url.contains("youtu.be/") {
+            let parts = url.components(separatedBy: "youtu.be/")
+            if parts.count > 1 {
+                let id = parts[1].components(separatedBy: "?")[0].components(separatedBy: "/")[0]
+                if !id.isEmpty { return id }
+            }
+        }
+        return nil
+    }
+    
+    private func fetchYouTubeThumbnailUrl() -> String? {
+        let script = """
+        tell application "System Events"
+            set isBrave to exists (processes whose name is "Brave Browser")
+            set isChrome to exists (processes whose name is "Google Chrome")
+            set isSafari to exists (processes whose name is "Safari")
+        end tell
+        if isBrave then
+            try
+                tell application "Brave Browser"
+                    repeat with win in every window
+                        repeat with t in every tab of win
+                            set tabURL to URL of t
+                            if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                return tabURL
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end try
+        end if
+        if isChrome then
+            try
+                tell application "Google Chrome"
+                    repeat with win in every window
+                        repeat with t in every tab of win
+                            set tabURL to URL of t
+                            if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                return tabURL
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end try
+        end if
+        if isSafari then
+            try
+                tell application "Safari"
+                    repeat with win in every window
+                        repeat with t in every tab of win
+                            set tabURL to URL of t
+                            if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be") then
+                                return tabURL
+                            end if
+                        end repeat
+                    end repeat
+                end tell
+            end try
+        end if
+        return "none"
+        """
+        if let urlStr = runIsolatedAppleScript(script), urlStr != "none" && !urlStr.isEmpty {
+            if let videoId = extractYouTubeVideoId(from: urlStr) {
+                return "https://i.ytimg.com/vi/\(videoId)/hqdefault.jpg"
+            }
+        }
+        return nil
+    }
+
     private func setNotPlaying() {
         Task { @MainActor in
             self.consecutiveNotPlayingCount += 1
@@ -1086,17 +1200,10 @@ final class MediaManager: ObservableObject {
         let isYT = self.isYouTube
         let cur = self.currentTime
         let dur = self.duration
+        let service = self.mediaService
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            
-            // Universal MediaRemote control
-            let cmdCode: Int32
-            if command == "playpause" { cmdCode = 2 }
-            else if command == "next track" { cmdCode = 4 }
-            else if command == "previous track" { cmdCode = 5 }
-            else { cmdCode = 2 }
-            _ = Self.mrSendCommand?(cmdCode, nil)
             
             let runningApps = NSWorkspace.shared.runningApplications
             let isSpotifyAppRunning = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
@@ -1120,6 +1227,13 @@ final class MediaManager: ObservableObject {
                         self.seek(to: max(0, cur - 10))
                     }
                 }
+            } else if service == .other && source == "MediaRemote" {
+                let cmdCode: Int32
+                if command == "playpause" { cmdCode = 2 }
+                else if command == "next track" { cmdCode = 4 }
+                else if command == "previous track" { cmdCode = 5 }
+                else { cmdCode = 2 }
+                _ = Self.mrSendCommand?(cmdCode, nil)
             } else {
                 self.sendBrowserControlCommand(command)
             }
