@@ -316,20 +316,42 @@ final class MediaManager: ObservableObject {
                 artist = artEl ? (artEl.textContent || artEl.innerText).trim() : 'YouTube';
                 isPlaying = ytPlaying ? 'playing' : 'paused';
             } else if (url.includes('spotify.com')) {
-                var t = document.querySelector('[data-testid="context-item-link"]');
-                var art = document.querySelector('[data-testid="context-item-info-subtitles"]');
-                var pb = document.querySelector('[data-testid="control-button-playpause"]');
-                var img = document.querySelector('img[data-testid="cover-art-image"]') || document.querySelector('img[data-testid="context-item-image"]');
-                if (t && art) {
-                    track = t.innerText;
-                    artist = art.innerText.replace(/[\\r\\n]+/g, ', ');
-                    isPlaying = (pb && pb.getAttribute('aria-label') === 'Pause') ? 'playing' : 'paused';
+                var t = document.querySelector('[data-testid="context-item-link"], [data-testid="now-playing-widget"] [data-testid="context-item-link"], a[data-testid="context-item-info-title"]');
+                var art = document.querySelector('[data-testid="context-item-info-subtitles"], [data-testid="now-playing-widget"] [data-testid="context-item-info-subtitles"], [data-testid="context-item-info-artist"]');
+                var pb = document.querySelector('[data-testid="control-button-playpause"], button[data-testid="control-button-playpause"], button[aria-label="Pause"], button[aria-label="Play"]');
+                var img = document.querySelector('img[data-testid="cover-art-image"]') || document.querySelector('img[data-testid="context-item-image"]') || document.querySelector('[data-testid="now-playing-widget"] img');
+                if (t && (t.innerText || t.textContent)) {
+                    track = (t.innerText || t.textContent).trim();
+                    if (art) {
+                        artist = (art.innerText || art.textContent || '').replace(/[\\r\\n]+/g, ', ').trim();
+                    }
+                    if (pb) {
+                        var label = pb.getAttribute('aria-label') || '';
+                        isPlaying = (label.toLowerCase().indexOf('pause') !== -1) ? 'playing' : 'paused';
+                    } else if (v) {
+                        isPlaying = (!v.paused && !v.ended) ? 'playing' : 'paused';
+                    }
                     imgUrl = img ? img.src : '';
                 }
-                var inp = document.querySelector('[data-testid="playback-progressbar"] input');
-                if (inp) {
-                    curPos = Math.round(Number(inp.value) / 1000);
-                    curDur = Math.round(Number(inp.max) / 1000);
+                
+                function parseTimeStr(s) {
+                    var p = (s || '').trim().split(':').map(Number);
+                    if (p.length === 2) return p[0]*60 + p[1];
+                    if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
+                    return 0;
+                }
+                var curEl = document.querySelector('[data-testid="playback-position"]');
+                var durEl = document.querySelector('[data-testid="playback-duration"]');
+                if (curEl && durEl && curEl.textContent && durEl.textContent) {
+                    curPos = parseTimeStr(curEl.textContent);
+                    curDur = parseTimeStr(durEl.textContent);
+                }
+                if (!curPos && !curDur) {
+                    var inp = document.querySelector('[data-testid="playback-progressbar"] input');
+                    if (inp) {
+                        curPos = Math.round(Number(inp.value) / 1000);
+                        curDur = Math.round(Number(inp.max) / 1000);
+                    }
                 }
             } else if (url.includes('music.apple.com')) {
                 var titleEl = document.querySelector('.web-chrome-playback-lcd__sub-copy-scroll-inner-text-wrapper, [data-testid="lcd-song-title"], .lcd-label__primary');
@@ -560,7 +582,7 @@ final class MediaManager: ObservableObject {
         var finalDuration = duration
         let timeSince = Date().timeIntervalSince(timestamp)
         let calculatedPos = max(0, isPlayingBool ? (elapsed + timeSince * (rateVal > 0 ? rateVal : 1.0)) : elapsed)
-        var finalPos = duration > 0 ? min(calculatedPos, duration) : calculatedPos
+        let finalPos = duration > 0 ? min(calculatedPos, duration) : calculatedPos
         
         let isNativeMusicRunning = NSWorkspace.shared.runningApplications.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
         if (isAppleMusic || service == .appleMusic || appName == "Music" || fullBundleId == "com.apple.Music") && isNativeMusicRunning {
@@ -592,13 +614,9 @@ final class MediaManager: ObservableObject {
             self.isNetflix = finalService == .netflix
             self.mediaService = finalService
             if !self.isScrubbing && Date() >= self.seekLockUntil {
-                if finalService == .appleMusic {
-                    if titleChanged {
-                        self.currentTime = 0
-                    } else if finalPos > 0 {
-                        self.currentTime = finalPos
-                    }
-                } else {
+                if titleChanged {
+                    self.currentTime = finalPos
+                } else if !self.isPlaying || abs(self.currentTime - finalPos) > 2.0 {
                     self.currentTime = finalPos
                 }
             }
@@ -723,13 +741,9 @@ final class MediaManager: ObservableObject {
                 self.mediaService = newService
                 let titleChanged = (self.title != newTitle)
                 if !self.isScrubbing && Date() >= self.seekLockUntil {
-                    if newService == .appleMusic || sourceApp == "MusicNative" {
-                        if titleChanged {
-                            self.currentTime = newCurPos
-                        } else if newCurPos > 0 && abs(self.currentTime - newCurPos) > 3.0 {
-                            self.currentTime = newCurPos
-                        }
-                    } else {
+                    if titleChanged {
+                        self.currentTime = newCurPos
+                    } else if !self.isPlaying || abs(self.currentTime - newCurPos) > 2.0 {
                         self.currentTime = newCurPos
                     }
                 }
@@ -850,7 +864,6 @@ final class MediaManager: ObservableObject {
     
     func seek(to seconds: Double) {
         let clampedSeconds = max(0, duration > 0 ? min(seconds, duration) : seconds)
-        let service = self.mediaService
         let source = self.currentSource
         
         Task { @MainActor in
@@ -1037,7 +1050,6 @@ final class MediaManager: ObservableObject {
     
     private func runControlCommand(_ command: String) {
         let source = self.currentSource
-        let service = self.mediaService
         let isYT = self.isYouTube
         let cur = self.currentTime
         let dur = self.duration
