@@ -210,8 +210,24 @@ final class MediaManager: ObservableObject {
 
             } else if (url.indexOf('youtube.com') !== -1 || url.indexOf('youtu.be') !== -1) {
                 service = 'youtube';
-                var ytTitleEl = document.querySelector('h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string, .ytp-title-link, h1.title, h1.ytd-video-primary-info-renderer yt-formatted-string');
-                track = ytTitleEl ? getText(ytTitleEl) : '';
+                var ytVideoId = '';
+                var ytPlayerEl = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+                
+                if (ytPlayerEl && typeof ytPlayerEl.getVideoData === 'function') {
+                    try {
+                        var vd = ytPlayerEl.getVideoData();
+                        if (vd) {
+                            if (vd.title) track = vd.title;
+                            if (vd.author) artist = vd.author;
+                            if (vd.video_id) ytVideoId = vd.video_id;
+                        }
+                    } catch(e_vd) {}
+                }
+
+                if (!track) {
+                    var ytTitleEl = document.querySelector('ytd-watch-metadata #title h1 yt-formatted-string, h1.ytd-watch-metadata yt-formatted-string, #title h1 yt-formatted-string, ytd-watch-flexy h1.title yt-formatted-string, .ytp-title-link, h1.title, h1.ytd-video-primary-info-renderer yt-formatted-string');
+                    track = ytTitleEl ? getText(ytTitleEl) : '';
+                }
                 if (!track && document.title) {
                     var cleanTitle = document.title.replace(/ - YouTube$/, '').replace(/^\(\d+\)\s*/, '').trim();
                     if (cleanTitle !== 'YouTube' && cleanTitle !== 'Watch history' && cleanTitle !== 'Subscriptions' && cleanTitle !== 'Home') {
@@ -219,15 +235,29 @@ final class MediaManager: ObservableObject {
                     }
                 }
 
-                var channelMeta = document.querySelector('span[itemprop="author"] link[itemprop="name"], link[itemprop="name"]');
-                var ytChannel = channelMeta ? channelMeta.getAttribute('content') : '';
-                if (!ytChannel) {
-                    var ytArtistEl = document.querySelector('#owner #channel-name a, #upload-info #channel-name a, ytd-video-owner-renderer #channel-name a, ytd-channel-name yt-formatted-string a, #owner ytd-channel-name a, .ytp-title-channel-name, ytd-channel-name a');
-                    if (ytArtistEl) ytChannel = getText(ytArtistEl);
+                if (!artist || artist === 'YouTube') {
+                    var ytArtistEl = document.querySelector(
+                        'ytd-watch-metadata #owner #text a, ' +
+                        'ytd-watch-metadata #owner ytd-channel-name a, ' +
+                        'ytd-watch-metadata ytd-channel-name yt-formatted-string a, ' +
+                        'ytd-watch-metadata ytd-channel-name yt-formatted-string, ' +
+                        'ytd-video-owner-renderer #channel-name a, ' +
+                        'ytd-video-owner-renderer #text a, ' +
+                        '#owner #channel-name a, ' +
+                        '#upload-info #channel-name a, ' +
+                        'ytd-channel-name yt-formatted-string a, ' +
+                        '#owner ytd-channel-name a, ' +
+                        '.ytp-title-channel-name a, ' +
+                        '.ytp-title-channel-name, ' +
+                        'ytd-channel-name a'
+                    );
+                    if (ytArtistEl) {
+                        var aText = getText(ytArtistEl);
+                        if (aText && aText !== 'YouTube') artist = aText;
+                    }
                 }
-                artist = ytChannel || 'YouTube';
+                artist = artist || 'YouTube';
 
-                var ytPlayerEl = document.querySelector('.html5-video-player');
                 if (v) {
                     var vidPlaying = !v.paused && !v.ended;
                     if (ytPlayerEl && ytPlayerEl.classList.contains('paused-mode')) {
@@ -242,11 +272,12 @@ final class MediaManager: ObservableObject {
                     isPlaying = 'paused';
                 }
 
-                var ytVideoId = '';
-                try {
-                    var sp = new URLSearchParams(window.location.search);
-                    if (sp.has('v')) ytVideoId = sp.get('v');
-                } catch(e2) {}
+                if (!ytVideoId) {
+                    try {
+                        var sp = new URLSearchParams(window.location.search);
+                        if (sp.has('v')) ytVideoId = sp.get('v');
+                    } catch(e2) {}
+                }
                 if (!ytVideoId && url.indexOf('/shorts/') !== -1) {
                     var shortParts = url.split('/shorts/');
                     if (shortParts.length > 1) ytVideoId = shortParts[1].split('?')[0].split('/')[0];
@@ -1240,6 +1271,14 @@ final class MediaManager: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
+            // Universal MediaRemote control (always send for system now playing sync)
+            let cmdCode: Int32
+            if command == "playpause" { cmdCode = 2 }
+            else if command == "next track" { cmdCode = 4 }
+            else if command == "previous track" { cmdCode = 5 }
+            else { cmdCode = 2 }
+            _ = Self.mrSendCommand?(cmdCode, nil)
+            
             let runningApps = NSWorkspace.shared.runningApplications
             let isSpotifyAppRunning = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.spotify.client" }
             let isMusicAppRunning = runningApps.contains { ($0.bundleIdentifier ?? "") == "com.apple.Music" }
@@ -1261,13 +1300,6 @@ final class MediaManager: ObservableObject {
                         self.seek(to: max(0, cur - 10))
                     }
                 }
-            } else if service == .other && source == "MediaRemote" {
-                let cmdCode: Int32
-                if command == "playpause" { cmdCode = 2 }
-                else if command == "next track" { cmdCode = 4 }
-                else if command == "previous track" { cmdCode = 5 }
-                else { cmdCode = 2 }
-                _ = Self.mrSendCommand?(cmdCode, nil)
             } else {
                 self.sendBrowserControlCommand(command)
             }
@@ -1283,57 +1315,84 @@ final class MediaManager: ObservableObject {
         (function() {
             var cmd = '\(command)';
             if (cmd === 'playpause') {
-                var spPlayBtn = document.querySelector('button[data-testid="control-button-playpause"], [data-testid="control-button-playpause"], button[aria-label="Pause"], button[aria-label="Play"]');
-                var nfPlayBtn = document.querySelector('[data-uia="control-play-pause-play"], [data-uia="control-play-pause-pause"], [data-uia="control-play-pause"], .button-nfVideosPlay, .button-nfVideosPause');
-                var ytPlayBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, .web-chrome-playback-controls__play-pause-btn');
-                if (spPlayBtn) {
-                    spPlayBtn.click();
-                } else if (nfPlayBtn) {
-                    nfPlayBtn.click();
-                } else if (ytPlayBtn) {
-                    ytPlayBtn.click();
+                var yt = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+                if (yt && typeof yt.getPlayerState === 'function') {
+                    var st = yt.getPlayerState();
+                    if (st === 1) {
+                        yt.pauseVideo();
+                    } else {
+                        yt.playVideo();
+                    }
+                } else if (yt && typeof yt.playVideo === 'function' && typeof yt.pauseVideo === 'function') {
+                    var v = yt.querySelector('video') || document.querySelector('video');
+                    if (v && !v.paused) {
+                        yt.pauseVideo();
+                    } else {
+                        yt.playVideo();
+                    }
                 } else {
-                    var videos = Array.from(document.querySelectorAll('video, audio'));
-                    var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
-                    if (v) {
-                        if (v.paused) v.play(); else v.pause();
+                    var spPlayBtn = document.querySelector('button[data-testid="control-button-playpause"], [data-testid="control-button-playpause"], button[aria-label="Pause"], button[aria-label="Play"]');
+                    var nfPlayBtn = document.querySelector('[data-uia="control-play-pause-play"], [data-uia="control-play-pause-pause"], [data-uia="control-play-pause"], .button-nfVideosPlay, .button-nfVideosPause');
+                    var ytPlayBtn = document.querySelector('.ytp-play-button, .play-pause-button.ytmusic-player-bar, #play-pause-button, .web-chrome-playback-controls__play-pause-btn');
+                    if (spPlayBtn) {
+                        spPlayBtn.click();
+                    } else if (nfPlayBtn) {
+                        nfPlayBtn.click();
+                    } else if (ytPlayBtn) {
+                        ytPlayBtn.click();
+                    } else {
+                        var videos = Array.from(document.querySelectorAll('video, audio'));
+                        var v = videos.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos[0];
+                        if (v) {
+                            if (v.paused) v.play(); else v.pause();
+                        }
                     }
                 }
             } else if (cmd === 'next track') {
-                var spNextBtn = document.querySelector('[data-testid="control-button-skip-forward"], button[data-testid="control-button-skip-forward"], button[aria-label="Next"]');
-                var nfForwardBtn = document.querySelector('[data-uia="control-fast-forward"], [data-uia="control-seek-forward"], [data-uia="control-skip-forward"], .button-nfVideosFastForward');
-                var nextBtn = document.querySelector('.ytp-next-button, .next-button.ytmusic-player-bar, .web-chrome-playback-controls__forward-btn');
-                if (spNextBtn) {
-                    spNextBtn.click();
-                } else if (nfForwardBtn) {
-                    nfForwardBtn.click();
-                } else if (nextBtn) {
-                    nextBtn.click();
+                var yt = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+                if (yt && typeof yt.nextVideo === 'function') {
+                    yt.nextVideo();
                 } else {
-                    var videos2 = Array.from(document.querySelectorAll('video, audio'));
-                    var v2 = videos2.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos2[0];
-                    if (v2 && isFinite(v2.duration) && v2.duration > 0) {
-                        v2.currentTime = Math.min(v2.duration, v2.currentTime + 10);
+                    var spNextBtn = document.querySelector('[data-testid="control-button-skip-forward"], button[data-testid="control-button-skip-forward"], button[aria-label="Next"]');
+                    var nfForwardBtn = document.querySelector('[data-uia="control-fast-forward"], [data-uia="control-seek-forward"], [data-uia="control-skip-forward"], .button-nfVideosFastForward');
+                    var nextBtn = document.querySelector('.ytp-next-button, .next-button.ytmusic-player-bar, .web-chrome-playback-controls__forward-btn');
+                    if (spNextBtn) {
+                        spNextBtn.click();
+                    } else if (nfForwardBtn) {
+                        nfForwardBtn.click();
+                    } else if (nextBtn) {
+                        nextBtn.click();
+                    } else {
+                        var videos2 = Array.from(document.querySelectorAll('video, audio'));
+                        var v2 = videos2.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos2[0];
+                        if (v2 && isFinite(v2.duration) && v2.duration > 0) {
+                            v2.currentTime = Math.min(v2.duration, v2.currentTime + 10);
+                        }
                     }
                 }
             } else if (cmd === 'previous track') {
-                var spPrevBtn = document.querySelector('[data-testid="control-button-skip-back"], button[data-testid="control-button-skip-back"], button[aria-label="Previous"]');
-                var nfRewindBtn = document.querySelector('[data-uia="control-seek-back"], [data-uia="control-fast-rewind"], [data-uia="control-skip-back"], .button-nfVideosRewind');
-                var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, .web-chrome-playback-controls__backward-btn');
-                if (spPrevBtn) {
-                    spPrevBtn.click();
-                } else if (nfRewindBtn) {
-                    nfRewindBtn.click();
-                } else if (prevBtn) {
-                    prevBtn.click();
+                var yt = document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+                if (yt && typeof yt.previousVideo === 'function') {
+                    yt.previousVideo();
                 } else {
-                    var videos3 = Array.from(document.querySelectorAll('video, audio'));
-                    var v3 = videos3.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos3[0];
-                    if (v3) {
-                        if (v3.currentTime > 3) {
-                            v3.currentTime = 0;
-                        } else {
-                            v3.currentTime = Math.max(0, v3.currentTime - 10);
+                    var spPrevBtn = document.querySelector('[data-testid="control-button-skip-back"], button[data-testid="control-button-skip-back"], button[aria-label="Previous"]');
+                    var nfRewindBtn = document.querySelector('[data-uia="control-seek-back"], [data-uia="control-fast-rewind"], [data-uia="control-skip-back"], .button-nfVideosRewind');
+                    var prevBtn = document.querySelector('.ytp-prev-button, .previous-button.ytmusic-player-bar, .web-chrome-playback-controls__backward-btn');
+                    if (spPrevBtn) {
+                        spPrevBtn.click();
+                    } else if (nfRewindBtn) {
+                        nfRewindBtn.click();
+                    } else if (prevBtn) {
+                        prevBtn.click();
+                    } else {
+                        var videos3 = Array.from(document.querySelectorAll('video, audio'));
+                        var v3 = videos3.find(function(x) { return !x.paused; }) || document.querySelector('.html5-main-video') || videos3[0];
+                        if (v3) {
+                            if (v3.currentTime > 3) {
+                                v3.currentTime = 0;
+                            } else {
+                                v3.currentTime = Math.max(0, v3.currentTime - 10);
+                            }
                         }
                     }
                 }
