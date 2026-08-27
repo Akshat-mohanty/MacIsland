@@ -25,11 +25,14 @@ final class MediaManager: ObservableObject {
     @Published var currentSource: String = ""
     
     var accentColor: Color {
+        if isYouTube || mediaService == .youtube {
+            return Color(red: 224/255.0, green: 174/255.0, blue: 34/255.0) // #e0ae22
+        }
         switch mediaService {
         case .spotify:
             return Color(red: 0.22, green: 0.86, blue: 0.45)
         case .youtube:
-            return Color(red: 255/255.0, green: 51/255.0, blue: 51/255.0)
+            return Color(red: 224/255.0, green: 174/255.0, blue: 34/255.0) // #e0ae22
         case .appleMusic:
             return Color(red: 250/255.0, green: 45/255.0, blue: 72/255.0)
         case .netflix:
