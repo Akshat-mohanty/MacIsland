@@ -126,6 +126,33 @@ final class MediaManager: ObservableObject {
                 }
             }
         }
+        
+        let wsCenter = NSWorkspace.shared.notificationCenter
+        wsCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.handleSleep()
+        }
+        wsCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.handleWake()
+        }
+        wsCenter.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.handleSleep()
+        }
+        wsCenter.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.handleWake()
+        }
+    }
+    
+    private func handleSleep() {
+        Task { @MainActor in
+            self.isPlaying = false
+            self.setNotPlaying()
+        }
+    }
+    
+    private func handleWake() {
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.fetchNowPlayingInfo()
+        }
     }
     
     private func startPolling() {
@@ -434,19 +461,21 @@ final class MediaManager: ObservableObject {
         if hasSpotify {
             let src = """
             try
-                tell application id "com.spotify.client"
-                    if player state is playing then
-                        set trackName to (name of current track as text)
-                        set trackArtist to (artist of current track as text)
-                        set curPos to (player position)
-                        set curDur to (duration of current track) / 1000
-                        set trackArt to "none"
-                        try
-                            set trackArt to (artwork url of current track as text)
-                        end try
-                        return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|" & trackArt & "|" & curPos & "|" & curDur & "|spotify"
-                    end if
-                end tell
+                if application id "com.spotify.client" is running then
+                    tell application id "com.spotify.client"
+                        if player state is playing then
+                            set trackName to (name of current track as text)
+                            set trackArtist to (artist of current track as text)
+                            set curPos to (player position)
+                            set curDur to (duration of current track) / 1000
+                            set trackArt to "none"
+                            try
+                                set trackArt to (artwork url of current track as text)
+                            end try
+                            return "SpotifyNative|" & trackName & "|" & trackArtist & "|playing|" & trackArt & "|" & curPos & "|" & curDur & "|spotify"
+                        end if
+                    end tell
+                end if
             end try
             """
             if let res = runIsolatedAppleScript(src) {
@@ -459,33 +488,35 @@ final class MediaManager: ObservableObject {
         if hasMusic {
             let src = """
             try
-                tell application id "com.apple.Music"
-                    if (player state as string) is "playing" then
-                        set trackName to ""
-                        try
-                            set trackName to (name of current track as text)
-                        end try
-                        set trackArtist to ""
-                        try
-                            if (artist of current track) is not missing value then
-                                set trackArtist to (artist of current track as text)
-                            end if
-                        end try
-                        set curPos to 0
-                        try
-                            if (player position) is not missing value then
-                                set curPos to (player position)
-                            end if
-                        end try
-                        set curDur to 0
-                        try
-                            if (duration of current track) is not missing value then
-                                set curDur to (duration of current track)
-                            end if
-                        end try
-                        return "MusicNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|applemusic"
-                    end if
-                end tell
+                if application id "com.apple.Music" is running then
+                    tell application id "com.apple.Music"
+                        if (player state as string) is "playing" then
+                            set trackName to ""
+                            try
+                                set trackName to (name of current track as text)
+                            end try
+                            set trackArtist to ""
+                            try
+                                if (artist of current track) is not missing value then
+                                    set trackArtist to (artist of current track as text)
+                                end if
+                            end try
+                            set curPos to 0
+                            try
+                                if (player position) is not missing value then
+                                    set curPos to (player position)
+                                end if
+                            end try
+                            set curDur to 0
+                            try
+                                if (duration of current track) is not missing value then
+                                    set curDur to (duration of current track)
+                                end if
+                            end try
+                            return "MusicNative|" & trackName & "|" & trackArtist & "|playing|none|" & curPos & "|" & curDur & "|applemusic"
+                        end if
+                    end tell
+                end if
             end try
             """
             if let res = runIsolatedAppleScript(src) {
@@ -499,22 +530,24 @@ final class MediaManager: ObservableObject {
             let src = """
             set webScraper to "\(escapedScraper)"
             try
-                tell application "\(appName)"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
-                                try
-                                    tell t to set res to execute javascript webScraper
-                                    if res is not missing value and res is not "null" and res contains "\\"isPlaying\\":true" then
-                                        return "\(tag)|" & res
-                                    end if
-                                on error
-                                end try
-                            end if
+                if application "\(appName)" is running then
+                    tell application "\(appName)"
+                        repeat with win in every window
+                            repeat with t in every tab of win
+                                set tabURL to URL of t
+                                if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
+                                    try
+                                        tell t to set res to execute javascript webScraper
+                                        if res is not missing value and res is not "null" and res contains "\\"isPlaying\\":true" then
+                                            return "\(tag)|" & res
+                                        end if
+                                    on error
+                                    end try
+                                end if
+                            end repeat
                         end repeat
-                    end repeat
-                end tell
+                    end tell
+                end if
             end try
             """
             if let res = runIsolatedAppleScript(src) {
@@ -528,22 +561,24 @@ final class MediaManager: ObservableObject {
             let src = """
             set webScraper to "\(escapedScraper)"
             try
-                tell application "Safari"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
-                                try
-                                    set res to do JavaScript webScraper in t
-                                    if res is not missing value and res is not "null" and res contains "\\"isPlaying\\":true" then
-                                        return "Safari|" & res
-                                    end if
-                                on error
-                                end try
-                            end if
+                if application "Safari" is running then
+                    tell application "Safari"
+                        repeat with win in every window
+                            repeat with t in every tab of win
+                                set tabURL to URL of t
+                                if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
+                                    try
+                                        set res to do JavaScript webScraper in t
+                                        if res is not missing value and res is not "null" and res contains "\\"isPlaying\\":true" then
+                                            return "Safari|" & res
+                                        end if
+                                    on error
+                                    end try
+                                end if
+                            end repeat
                         end repeat
-                    end repeat
-                end tell
+                    end tell
+                end if
             end try
             """
             if let res = runIsolatedAppleScript(src) {
@@ -601,22 +636,24 @@ final class MediaManager: ObservableObject {
             let src = """
             set webScraper to "\(escapedScraper)"
             try
-                tell application "\(appName)"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
-                                try
-                                    tell t to set res to execute javascript webScraper
-                                    if res is not missing value and res is not "null" then
-                                        return "\(tag)|" & res
-                                    end if
-                                on error
-                                end try
-                            end if
+                if application "\(appName)" is running then
+                    tell application "\(appName)"
+                        repeat with win in every window
+                            repeat with t in every tab of win
+                                set tabURL to URL of t
+                                if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
+                                    try
+                                        tell t to set res to execute javascript webScraper
+                                        if res is not missing value and res is not "null" and res is not "{}" then
+                                            return "\(tag)|" & res
+                                        end if
+                                    on error
+                                    end try
+                                end if
+                            end repeat
                         end repeat
-                    end repeat
-                end tell
+                    end tell
+                end if
             end try
             """
             if let res = runIsolatedAppleScript(src) {
@@ -630,22 +667,24 @@ final class MediaManager: ObservableObject {
             let src = """
             set webScraper to "\(escapedScraper)"
             try
-                tell application "Safari"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
-                                try
-                                    set res to do JavaScript webScraper in t
-                                    if res is not missing value and res is not "null" then
-                                        return "Safari|" & res
-                                    end if
-                                on error
-                                end try
-                            end if
+                if application "Safari" is running then
+                    tell application "Safari"
+                        repeat with win in every window
+                            repeat with t in every tab of win
+                                set tabURL to URL of t
+                                if tabURL is not missing value and (tabURL contains "spotify.com" or tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "music.youtube.com") then
+                                    try
+                                        set res to do JavaScript webScraper in t
+                                        if res is not missing value and res is not "null" and res is not "{}" then
+                                            return "Safari|" & res
+                                        end if
+                                    on error
+                                    end try
+                                end if
+                            end repeat
                         end repeat
-                    end repeat
-                end tell
+                    end tell
+                end if
             end try
             """
             if let res = runIsolatedAppleScript(src) {
@@ -658,17 +697,19 @@ final class MediaManager: ObservableObject {
         if hasSpotify {
             let src = """
             try
-                tell application id "com.spotify.client"
-                    set trackName to (name of current track as text)
-                    set trackArtist to (artist of current track as text)
-                    set curPos to (player position)
-                    set curDur to (duration of current track) / 1000
-                    set trackArt to "none"
-                    try
-                        set trackArt to (artwork url of current track as text)
-                    end try
-                    return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|" & trackArt & "|" & curPos & "|" & curDur & "|spotify"
-                end tell
+                if application id "com.spotify.client" is running then
+                    tell application id "com.spotify.client"
+                        set trackName to (name of current track as text)
+                        set trackArtist to (artist of current track as text)
+                        set curPos to (player position)
+                        set curDur to (duration of current track) / 1000
+                        set trackArt to "none"
+                        try
+                            set trackArt to (artwork url of current track as text)
+                        end try
+                        return "SpotifyNative|" & trackName & "|" & trackArtist & "|paused|" & trackArt & "|" & curPos & "|" & curDur & "|spotify"
+                    end tell
+                end if
             end try
             """
             if let res = runIsolatedAppleScript(src) {
@@ -681,31 +722,33 @@ final class MediaManager: ObservableObject {
         if hasMusic {
             let src = """
             try
-                tell application id "com.apple.Music"
-                    set trackName to ""
-                    try
-                        set trackName to (name of current track as text)
-                    end try
-                    set trackArtist to ""
-                    try
-                        if (artist of current track) is not missing value then
-                            set trackArtist to (artist of current track as text)
-                        end if
-                    end try
-                    set curPos to 0
-                    try
-                        if (player position) is not missing value then
-                            set curPos to (player position)
-                        end if
-                    end try
-                    set curDur to 0
-                    try
-                        if (duration of current track) is not missing value then
-                            set curDur to (duration of current track)
-                        end if
-                    end try
-                    return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|applemusic"
-                end tell
+                if application id "com.apple.Music" is running then
+                    tell application id "com.apple.Music"
+                        set trackName to ""
+                        try
+                            set trackName to (name of current track as text)
+                        end try
+                        set trackArtist to ""
+                        try
+                            if (artist of current track) is not missing value then
+                                set trackArtist to (artist of current track as text)
+                            end if
+                        end try
+                        set curPos to 0
+                        try
+                            if (player position) is not missing value then
+                                set curPos to (player position)
+                            end if
+                        end try
+                        set curDur to 0
+                        try
+                            if (duration of current track) is not missing value then
+                                set curDur to (duration of current track)
+                            end if
+                        end try
+                        return "MusicNative|" & trackName & "|" & trackArtist & "|paused|none|" & curPos & "|" & curDur & "|applemusic"
+                    end tell
+                end if
             end try
             """
             if let res = runIsolatedAppleScript(src) {
@@ -771,14 +814,6 @@ final class MediaManager: ObservableObject {
         if artwork == nil {
             if let cached = Self.artworkCache.object(forKey: "art_\(title)" as NSString) {
                 artwork = cached
-            }
-        }
-        
-        if service == .youtube && artwork == nil {
-            DispatchQueue.global(qos: .background).async { [weak self] in
-                if let ytThumbUrl = self?.fetchYouTubeThumbnailUrl() {
-                    self?.fetchAndCacheImage(from: ytThumbUrl, cacheKey: "art_\(title)")
-                }
             }
         }
         
@@ -999,13 +1034,6 @@ final class MediaManager: ObservableObject {
                             }
                         }
                     }
-                } else if newService == .youtube {
-                    DispatchQueue.global(qos: .background).async { [weak self] in
-                        guard let self = self else { return }
-                        if let thumbUrl = self.fetchYouTubeThumbnailUrl() {
-                            self.fetchAndCacheImage(from: thumbUrl, cacheKey: "art_\(newTitle)")
-                        }
-                    }
                 } else if self.artworkImage == nil {
                     self.lastArtworkURL = ""
                     self.loadAppIcon(for: sourceApp)
@@ -1060,87 +1088,7 @@ final class MediaManager: ObservableObject {
         }.resume()
     }
     
-    private func extractYouTubeVideoId(from url: String) -> String? {
-        if let components = URLComponents(string: url), let queryItems = components.queryItems {
-            if let vItem = queryItems.first(where: { $0.name == "v" }), let vVal = vItem.value, !vVal.isEmpty {
-                return vVal
-            }
-        }
-        if url.contains("/shorts/") {
-            let parts = url.components(separatedBy: "/shorts/")
-            if parts.count > 1 {
-                let id = parts[1].components(separatedBy: "?")[0].components(separatedBy: "/")[0]
-                if !id.isEmpty { return id }
-            }
-        }
-        if url.contains("youtu.be/") {
-            let parts = url.components(separatedBy: "youtu.be/")
-            if parts.count > 1 {
-                let id = parts[1].components(separatedBy: "?")[0].components(separatedBy: "/")[0]
-                if !id.isEmpty { return id }
-            }
-        }
-        return nil
-    }
-    
-    private func fetchYouTubeThumbnailUrl() -> String? {
-        let script = """
-        tell application "System Events"
-            set isBrave to exists (processes whose name is "Brave Browser")
-            set isChrome to exists (processes whose name is "Google Chrome")
-            set isSafari to exists (processes whose name is "Safari")
-        end tell
-        if isBrave then
-            try
-                tell application "Brave Browser"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                return tabURL
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end try
-        end if
-        if isChrome then
-            try
-                tell application "Google Chrome"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                return tabURL
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end try
-        end if
-        if isSafari then
-            try
-                tell application "Safari"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be") then
-                                return tabURL
-                            end if
-                        end repeat
-                    end repeat
-                end tell
-            end try
-        end if
-        return "none"
-        """
-        if let urlStr = runIsolatedAppleScript(script), urlStr != "none" && !urlStr.isEmpty {
-            if let videoId = extractYouTubeVideoId(from: urlStr) {
-                return "https://i.ytimg.com/vi/\(videoId)/hqdefault.jpg"
-            }
-        }
-        return nil
-    }
+
 
     private func setNotPlaying() {
         Task { @MainActor in
@@ -1295,19 +1243,21 @@ final class MediaManager: ObservableObject {
             if isRunning {
                 let script = """
                 try
-                    tell application "\(appName)"
-                        repeat with win in every window
-                            repeat with t in every tab of win
-                                set tabURL to URL of t
-                                if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "soundcloud.com" or tabURL contains "twitch.tv" or tabURL contains "vimeo.com") then
-                                    try
-                                        tell t to execute javascript "\(escapedJsSeek)"
-                                    on error
-                                    end try
-                                end if
+                    if application "\(appName)" is running then
+                        tell application "\(appName)"
+                            repeat with win in every window
+                                repeat with t in every tab of win
+                                    set tabURL to URL of t
+                                    if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "soundcloud.com" or tabURL contains "twitch.tv" or tabURL contains "vimeo.com") then
+                                        try
+                                            tell t to execute javascript "\(escapedJsSeek)"
+                                        on error
+                                        end try
+                                    end if
+                                end repeat
                             end repeat
-                        end repeat
-                    end tell
+                        end tell
+                    end if
                 end try
                 """
                 _ = NSAppleScript(source: script)?.executeAndReturnError(nil)
@@ -1318,19 +1268,21 @@ final class MediaManager: ObservableObject {
         if isSafariRunning {
             let script = """
             try
-                tell application "Safari"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "soundcloud.com" or tabURL contains "twitch.tv" or tabURL contains "vimeo.com") then
-                                try
-                                    do JavaScript "\(escapedJsSeek)" in t
-                                on error
-                                end try
-                            end if
+                if application "Safari" is running then
+                    tell application "Safari"
+                        repeat with win in every window
+                            repeat with t in every tab of win
+                                set tabURL to URL of t
+                                if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com" or tabURL contains "soundcloud.com" or tabURL contains "twitch.tv" or tabURL contains "vimeo.com") then
+                                    try
+                                        do JavaScript "\(escapedJsSeek)" in t
+                                    on error
+                                    end try
+                                end if
+                            end repeat
                         end repeat
-                    end repeat
-                end tell
+                    end tell
+                end if
             end try
             """
             _ = NSAppleScript(source: script)?.executeAndReturnError(nil)
@@ -1376,9 +1328,9 @@ final class MediaManager: ObservableObject {
             let isAppleMusicNative = (source == "MusicNative" || (source == "Music" && isMusicAppRunning)) && isMusicAppRunning
             
             if isSpotifyNative {
-                _ = NSAppleScript(source: "try\ntell application id \"com.spotify.client\" to \(command)\nend try")?.executeAndReturnError(nil)
+                _ = NSAppleScript(source: "try\nif application id \"com.spotify.client\" is running then\ntell application id \"com.spotify.client\" to \(command)\nend if\nend try")?.executeAndReturnError(nil)
             } else if isAppleMusicNative {
-                _ = NSAppleScript(source: "try\ntell application id \"com.apple.Music\" to \(command)\nend try")?.executeAndReturnError(nil)
+                _ = NSAppleScript(source: "try\nif application id \"com.apple.Music\" is running then\ntell application id \"com.apple.Music\" to \(command)\nend if\nend try")?.executeAndReturnError(nil)
             } else if isYT && command != "playpause" {
                 if command == "next track", dur > 0 {
                     self.seek(to: min(dur, cur + 10))
@@ -1449,6 +1401,7 @@ final class MediaManager: ObservableObject {
                         }
                     }
                 }
+            }
         })();
         """
 
@@ -1475,19 +1428,21 @@ final class MediaManager: ObservableObject {
             if isRunning {
                 let script = """
                 try
-                    tell application "\(appName)"
-                        repeat with win in every window
-                            repeat with t in every tab of win
-                                set tabURL to URL of t
-                                if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com") then
-                                    try
-                                        tell t to execute javascript "\(escapedJsCmd)"
-                                    on error
-                                    end try
-                                end if
+                    if application "\(appName)" is running then
+                        tell application "\(appName)"
+                            repeat with win in every window
+                                repeat with t in every tab of win
+                                    set tabURL to URL of t
+                                    if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com") then
+                                        try
+                                            tell t to execute javascript "\(escapedJsCmd)"
+                                        on error
+                                        end try
+                                    end if
+                                end repeat
                             end repeat
-                        end repeat
-                    end tell
+                        end tell
+                    end if
                 end try
                 """
                 _ = NSAppleScript(source: script)?.executeAndReturnError(nil)
@@ -1498,19 +1453,21 @@ final class MediaManager: ObservableObject {
         if isSafariRunning {
             let script = """
             try
-                tell application "Safari"
-                    repeat with win in every window
-                        repeat with t in every tab of win
-                            set tabURL to URL of t
-                            if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com") then
-                                try
-                                    do JavaScript "\(escapedJsCmd)" in t
-                                on error
-                                end try
-                            end if
+                if application "Safari" is running then
+                    tell application "Safari"
+                        repeat with win in every window
+                            repeat with t in every tab of win
+                                set tabURL to URL of t
+                                if tabURL is not missing value and (tabURL contains "youtube.com" or tabURL contains "youtu.be" or tabURL contains "spotify.com" or tabURL contains "netflix.com" or tabURL contains "music.apple.com") then
+                                    try
+                                        do JavaScript "\(escapedJsCmd)" in t
+                                    on error
+                                    end try
+                                end if
+                            end repeat
                         end repeat
-                    end repeat
-                end tell
+                    end tell
+                end if
             end try
             """
             _ = NSAppleScript(source: script)?.executeAndReturnError(nil)
